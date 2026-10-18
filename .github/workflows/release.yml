@@ -42,6 +42,10 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: cargo test --locked
       - run: cargo install cargo-packager --locked
+      # Everything is compiled before the certificate enters the runner, so
+      # no build script of any dependency runs while the key is importable;
+      # cargo-packager then finds the build up to date.
+      - run: cargo build --release --locked
 
       # Authenticode, with WaveFlow's certificate (the same two secrets as
       # the WaveFlow and Resona repositories). It is self-signed: files are
@@ -100,6 +104,15 @@ jobs:
               exit 1
             }
             Write-Host "$($file.Name): signed by $($sig.SignerCertificate.Subject), $($sig.Status)"
+          }
+
+      - name: Remove the signing certificate from the runner
+        if: always()
+        shell: pwsh
+        run: |
+          if ($env:SIGNING_THUMBPRINT) {
+            Get-ChildItem Cert:CurrentUserMy | Where-Object { $_.Thumbprint -eq $env:SIGNING_THUMBPRINT } | Remove-Item
+            Write-Host "certificate removed from the store"
           }
 
       - name: Checksums
