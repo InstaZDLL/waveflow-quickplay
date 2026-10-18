@@ -43,7 +43,7 @@ eframe = { version = "0.36", default-features = false, features = [
 egui = "0.36"
 
 # ── Audio pipeline (the same crates and versions the desktop engine uses) ─
-cpal = "0.17"
+cpal = "0.18"
 rtrb = "0.4"
 rubato = "5.0"
 # FFT for the spectrum visualizer, the same wrapper the desktop uses.
