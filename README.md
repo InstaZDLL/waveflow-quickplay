@@ -57,7 +57,7 @@
 Download the package for your system from the [latest release](https://github.com/InstaZDLL/waveflow-quickplay/releases/latest):
 
 - **Windows**: `waveflow-quickplay_<version>_x64-setup.exe`. A per-user installer, no administrator rights, that also adds *Play with WaveFlow QuickPlay* and *Add to WaveFlow QuickPlay playlist* to the right-click menu of audio files and folders, and removes them on uninstall. It is signed with WaveFlow's self-signed certificate, so SmartScreen may warn once.
-- **Linux**: a `.deb` for Debian / Ubuntu, or an `.AppImage` for any distribution (make it executable and run it). Both come with the desktop entry, so QuickPlay appears in "Open with" for audio files.
+- **Linux**: a `.deb` for Debian / Ubuntu, an `.rpm` for Fedora / RHEL / openSUSE, or an `.AppImage` for any distribution (make it executable and run it). All three come with the desktop entry, so QuickPlay appears in "Open with" for audio files.
 
 Then double-click a track, or right-click it. That is the whole setup.
 
@@ -195,9 +195,10 @@ cargo fmt --check
 cargo clippy --all-targets
 cargo test
 
-cargo install cargo-packager
+cargo install cargo-packager cargo-generate-rpm
 cargo packager --release --formats nsis          # Windows: per-user installer
 cargo packager --release --formats deb,appimage  # Linux
+cargo generate-rpm                               # Linux: .rpm from the release binary
 ```
 
 The installers come out in `target/packager/`. The NSIS template in

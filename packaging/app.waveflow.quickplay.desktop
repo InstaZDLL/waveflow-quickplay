@@ -1,0 +1,29 @@
+[Desktop Entry]
+Type=Application
+Name=WaveFlow QuickPlay
+Comment=Play audio files quickly
+Comment[fr]=Lire rapidement des fichiers audio
+Comment[de]=Audiodateien schnell wiedergeben
+Comment[es]=Reproduce archivos de audio al instante
+Comment[it]=Riproduci rapidamente i file audio
+Comment[zh_CN]=快速播放音频文件
+Comment[ja]=オーディオファイルをすばやく再生
+Comment[ko]=오디오 파일을 빠르게 재생합니다
+Exec=waveflow-quickplay %F
+Icon=app.waveflow.quickplay
+Terminal=false
+Categories=AudioVideo;Audio;Player;
+MimeType=audio/flac;audio/mpeg;audio/mp4;audio/x-m4a;audio/aac;audio/x-aac;audio/ogg;audio/vorbis;audio/x-vorbis+ogg;audio/opus;audio/x-opus+ogg;audio/wav;audio/x-wav;audio/vnd.wave;audio/aiff;audio/x-aiff;audio/x-dsf;audio/x-dff;audio/x-dsd;
+StartupWMClass=app.waveflow.quickplay
+Actions=Enqueue;
+
+[Desktop Action Enqueue]
+Name=Add to WaveFlow QuickPlay playlist
+Name[fr]=Ajouter à la liste de lecture de WaveFlow QuickPlay
+Name[de]=Zur WaveFlow QuickPlay-Wiedergabeliste hinzufügen
+Name[es]=Añadir a la lista de WaveFlow QuickPlay
+Name[it]=Aggiungi alla playlist di WaveFlow QuickPlay
+Name[zh_CN]=添加到 WaveFlow QuickPlay 播放列表
+Name[ja]=WaveFlow QuickPlay のプレイリストに追加
+Name[ko]=WaveFlow QuickPlay 재생목록에 추가
+Exec=waveflow-quickplay --enqueue %F

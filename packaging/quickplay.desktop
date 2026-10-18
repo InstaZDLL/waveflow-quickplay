@@ -2,6 +2,13 @@
 Type=Application
 Name={{name}}
 Comment=Play audio files quickly
+Comment[fr]=Lire rapidement des fichiers audio
+Comment[de]=Audiodateien schnell wiedergeben
+Comment[es]=Reproduce archivos de audio al instante
+Comment[it]=Riproduci rapidamente i file audio
+Comment[zh_CN]=快速播放音频文件
+Comment[ja]=オーディオファイルをすばやく再生
+Comment[ko]=오디오 파일을 빠르게 재생합니다
 Exec={{exec}} %F
 Icon={{icon}}
 Terminal=false
@@ -12,4 +19,11 @@ Actions=Enqueue;
 
 [Desktop Action Enqueue]
 Name=Add to WaveFlow QuickPlay playlist
+Name[fr]=Ajouter à la liste de lecture de WaveFlow QuickPlay
+Name[de]=Zur WaveFlow QuickPlay-Wiedergabeliste hinzufügen
+Name[es]=Añadir a la lista de WaveFlow QuickPlay
+Name[it]=Aggiungi alla playlist di WaveFlow QuickPlay
+Name[zh_CN]=添加到 WaveFlow QuickPlay 播放列表
+Name[ja]=WaveFlow QuickPlay のプレイリストに追加
+Name[ko]=WaveFlow QuickPlay 재생목록에 추가
 Exec={{exec}} --enqueue %F
