@@ -80,7 +80,7 @@
 
 - **Compact**: clock, title, format chips, seek, volume and transport in 440 × 154 points. Height locked, width free.
 - **Artwork**: the cover above the controls, edge to edge, freely resizable. Press `A` or the artwork button to switch.
-- Custom title bar with pin (always on top), minimize and close; window size and mode are remembered.
+- Custom title bar with settings, pin (always on top), minimize and close; window size and mode are remembered.
 
 ### 📋 Playlist
 
@@ -100,9 +100,15 @@
 - `waveflow-quickplay --register` adds *Play with WaveFlow QuickPlay* and *Add to WaveFlow QuickPlay playlist* to the context menu of every audio extension and of folders, plus an "Open with" entry, for the current user and without administrator rights. On Linux it writes a `.desktop` entry with the audio MIME types. `--unregister` removes it all.
 - The default handler for the extensions is left to you (Settings › Default apps, or `xdg-mime default app.waveflow.quickplay.desktop audio/flac`).
 
+### ⚙️ Settings and languages
+
+- The gear in the title bar opens a page in place of the controls: the interface language, and an about block with the version, the licence and the link to this repository. `Esc` or its close button brings the controls back.
+- **Eight languages**: English, French, German, Spanish, Italian, Simplified Chinese, Japanese and Korean, each in its own file under `src/i18n/`. The system language is followed by default; a choice is kept in the settings file. Every string goes through one table, so a ninth language is one file and one enum variant.
+- The context-menu labels follow the language in force when `--register` runs; the Linux desktop entry carries all eight and the desktop picks.
+
 ### ✨ And also
 
-- Inter and Noto Sans CJK are embedded: Japanese, Korean and Chinese titles render the same on every machine.
+- Inter and Noto Sans CJK are embedded: Japanese, Korean and Chinese titles, and the interface in those languages, render the same on every machine.
 - Preferences live in their own namespace, `<config dir>/waveflow-quickplay/settings.json`, never read by the desktop app.
 - `RUST_LOG=debug` turns the log up; `QUICKPLAY_CAPTURE_DIR=<dir>` writes a PNG of the player window 2 s after start, for displays that cannot be grabbed from outside such as GNOME on Wayland.
 
@@ -116,6 +122,12 @@
   <tr>
     <td align="center"><sub><b>Compact</b> · the whole player in 440 × 154</sub></td>
     <td align="center"><sub><b>Artwork</b> · the cover edge to edge, window freely resizable</sub></td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center" valign="top"><img src="docs/screenshots/settings.png" alt="Settings page in place of the controls: language picker in the header, then name, version, tagline, engine, licence and repository link" /></td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center"><sub><b>Settings</b> · language and about, in the same 154 points</sub></td>
   </tr>
 </table>
 
@@ -153,6 +165,7 @@ waveflow-quickplay --unregister
 | T                   | Always on top               |
 | Ctrl+O              | Open files                  |
 | Delete (playlist)   | Remove the selected track   |
+| Esc                 | Close the settings page     |
 
 Shortcuts work whichever of the two windows has focus.
 
@@ -201,6 +214,7 @@ waveflow-quickplay
    ├── src/lyrics.rs      .lrc sidecar parser, line in force at a position
    ├── src/queue.rs       the playlist model
    ├── src/config.rs      settings.json
+   ├── src/i18n/          one strings table per language, system-language detection
    ├── src/ipc.rs         single instance: local socket, play / enqueue hand-over
    ├── src/integration.rs --register / --unregister (registry verbs, .desktop file)
    ├── src/platform.rs    Windows: owner link between the playlist window and the player
