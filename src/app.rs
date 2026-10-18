@@ -69,6 +69,9 @@ pub struct QuickPlayApp {
     /// Where the playlist window was first placed (beside the player).
     playlist_pos: Option<Pos2>,
     window_mode_applied: bool,
+    /// Last known minimized state of the main window, so the playlist can
+    /// follow it down and back up (as PotPlayer does with its playlist).
+    root_minimized: bool,
     /// Smoothed bar heights shown by the visualizer.
     spectrum: Vec<f32>,
     /// The last frame taken, which the bars ease toward.
@@ -101,6 +104,7 @@ impl QuickPlayApp {
             fail_streak: 0,
             playlist_pos: None,
             window_mode_applied: false,
+            root_minimized: false,
             spectrum: vec![0.0; crate::audio::spectrum::BAND_COUNT],
             spectrum_target: vec![0.0; crate::audio::spectrum::BAND_COUNT],
             spectrum_tick: Instant::now(),
@@ -630,7 +634,10 @@ impl QuickPlayApp {
                 self.settings.show_playlist = false;
                 self.settings.save();
             }
-            Action::Minimize => ctx.send_viewport_cmd(ViewportCommand::Minimized(true)),
+            Action::Minimize => {
+                ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Minimized(true));
+                self.set_playlist_minimized(true);
+            }
             Action::CloseWindow => ctx.send_viewport_cmd(ViewportCommand::Close),
         }
     }
@@ -700,8 +707,35 @@ impl QuickPlayApp {
         }
     }
 
+    fn playlist_viewport_id() -> ViewportId {
+        ViewportId::from_hash_of("quickplay.playlist")
+    }
+
+    /// Minimizes / restores the playlist window together with the player.
+    fn set_playlist_minimized(&self, minimized: bool) {
+        if self.settings.show_playlist {
+            self.ctx.send_viewport_cmd_to(
+                Self::playlist_viewport_id(),
+                ViewportCommand::Minimized(minimized),
+            );
+        }
+    }
+
+    /// The taskbar, Win+D or a `-` click can minimize the main window without
+    /// going through [`Action::Minimize`]; the playlist follows every
+    /// transition the backend reports, in both directions.
+    fn sync_playlist_minimized(&mut self, ctx: &egui::Context) {
+        let Some(minimized) = ctx.input(|i| i.viewport().minimized) else {
+            return;
+        };
+        if minimized != self.root_minimized {
+            self.root_minimized = minimized;
+            self.set_playlist_minimized(minimized);
+        }
+    }
+
     fn show_playlist_viewport(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
-        let id = ViewportId::from_hash_of("quickplay.playlist");
+        let id = Self::playlist_viewport_id();
         let [w, h] = self.settings.playlist_size;
         let mut builder = ViewportBuilder::default()
             .with_title("Playlist · WaveFlow QuickPlay")
@@ -763,6 +797,7 @@ impl eframe::App for QuickPlayApp {
         self.handle_dropped_files(ctx);
         self.handle_shortcuts(ctx);
         self.track_window_size(ctx);
+        self.sync_playlist_minimized(ctx);
         if self
             .status
             .as_ref()

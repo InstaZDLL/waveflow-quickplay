@@ -113,8 +113,10 @@ resize edges — `with_decorations(false)` plus `ViewportCommand::StartDrag`
 / `BeginResize`. Compact mode locks the height to the controls block;
 artwork mode adds the cover above it and makes the window freely
 resizable. The playlist is a second native window (`show_viewport_immediate`)
-placed beside the player; where the backend cannot open a second window,
-egui embeds it as a floating panel instead.
+placed beside the player; it minimizes and restores together with the player
+(whether through the `-` button, the taskbar or Win+D), as PotPlayer's
+playlist does. Where the backend cannot open a second window, egui embeds it
+as a floating panel instead.
 
 ## Measurements
 
