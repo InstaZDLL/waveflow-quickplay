@@ -96,6 +96,9 @@ pub struct QuickPlayApp {
     /// first frame (distinct from `dock_anchor`, which is also cleared when
     /// the player is minimized).
     playlist_place_pending: bool,
+    /// Generation whose `Loaded` event has arrived; state events before
+    /// that belong to the previous track.
+    loaded_generation: u64,
     /// Synced lyrics of the current track, from its `.lrc` sidecar.
     lyrics: Option<Lyrics>,
     /// Test-only window capture, armed by `QUICKPLAY_CAPTURE_DIR`.
@@ -154,6 +157,7 @@ impl QuickPlayApp {
             playlist_expected_pos: None,
             playlist_place_pending: false,
             lyrics: None,
+            loaded_generation: 0,
             capture: Capture::from_env(),
             ipc,
             // Files given on the command line count as the first `play` of a
@@ -211,9 +215,21 @@ impl QuickPlayApp {
     /// Expand `inputs` and append them. With `autoplay`, start the first new
     /// row when nothing is playing.
     fn add_paths(&mut self, inputs: &[PathBuf], autoplay: bool) {
+        if inputs.iter().any(|p| p.is_dir()) {
+            // Folders are walked on the loader's thread; the result comes
+            // back as `LoaderEvent::Scanned`.
+            self.set_status("Scanning folders…");
+            self.loader.request_scan(inputs.to_vec(), autoplay);
+            return;
+        }
         let paths = library::collect_audio_paths(inputs);
+        self.add_resolved(paths, !inputs.is_empty(), autoplay);
+    }
+
+    /// Queues already-expanded audio paths.
+    fn add_resolved(&mut self, paths: Vec<PathBuf>, had_inputs: bool, autoplay: bool) {
         if paths.is_empty() {
-            if !inputs.is_empty() {
+            if had_inputs {
                 self.set_status("No supported audio files");
             }
             return;
@@ -401,14 +417,17 @@ impl QuickPlayApp {
                     }
                     self.codec = codec;
                     self.fail_streak = 0;
+                    self.loaded_generation = generation;
                     self.status = None;
                 }
                 EngineEvent::Loaded { .. } => {}
                 EngineEvent::State(state) => {
-                    // A stale `Idle` from a superseded load would flicker
-                    // the button; the decoder's state is authoritative
-                    // otherwise.
-                    if !(state == PlayerState::Idle && self.state == PlayerState::Loading) {
+                    // `State` carries no generation: while a load is pending
+                    // and its `Loaded` has not arrived, any state event still
+                    // belongs to the superseded track and is ignored.
+                    let stale = self.state == PlayerState::Loading
+                        && self.loaded_generation != self.generation;
+                    if !stale {
                         self.state = state;
                     }
                 }
@@ -441,7 +460,16 @@ impl QuickPlayApp {
                         }
                     }
                 }
-                EngineEvent::Output(message) => self.set_status(message),
+                EngineEvent::Output(message) => {
+                    // The device is gone (unplugged, format changed): the
+                    // stream is dead, so release the engine; the next play
+                    // opens a fresh one on the current default device.
+                    tracing::warn!(%message, "output stream lost, releasing the engine");
+                    self.set_status(message);
+                    self.state = PlayerState::Idle;
+                    self.engine = None;
+                    break;
+                }
             }
         }
     }
@@ -449,6 +477,10 @@ impl QuickPlayApp {
     fn pump_loader_events(&mut self) {
         for event in self.loader.poll() {
             match event {
+                LoaderEvent::Scanned { paths, autoplay } => {
+                    self.status = None;
+                    self.add_resolved(paths, true, autoplay);
+                }
                 LoaderEvent::Meta { id, meta } => {
                     let is_playing = self.playing_id == Some(id);
                     if is_playing && self.duration_ms.is_none() {

@@ -65,6 +65,9 @@ fn set_state(shared: &SharedPlayback, events: &EventSink, state: PlayerState) {
 /// Flush and return to a clean idle: nothing queued, nothing paused, clock
 /// at zero.
 fn stop_playback(producer: &Producer<f32>, shared: &SharedPlayback, events: &EventSink) {
+    // Silence first, then lift a pause so the callback actually drains.
+    shared.drain_silent.store(true, Ordering::Release);
+    shared.paused_output.store(false, Ordering::Release);
     drain_ring(producer, shared);
     shared.drain_silent.store(false, Ordering::Release);
     shared.paused_output.store(false, Ordering::Release);

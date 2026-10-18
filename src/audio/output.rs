@@ -143,6 +143,14 @@ fn build_stream(
         SampleFormat::I16 => open_stream::<i16>(&device, &config, consumer, shared, on_error),
         SampleFormat::U16 => open_stream::<u16>(&device, &config, consumer, shared, on_error),
         SampleFormat::I32 => open_stream::<i32>(&device, &config, consumer, shared, on_error),
+        SampleFormat::I8 => open_stream::<i8>(&device, &config, consumer, shared, on_error),
+        SampleFormat::I24 => open_stream::<cpal::I24>(&device, &config, consumer, shared, on_error),
+        SampleFormat::I64 => open_stream::<i64>(&device, &config, consumer, shared, on_error),
+        SampleFormat::U8 => open_stream::<u8>(&device, &config, consumer, shared, on_error),
+        SampleFormat::U24 => open_stream::<cpal::U24>(&device, &config, consumer, shared, on_error),
+        SampleFormat::U32 => open_stream::<u32>(&device, &config, consumer, shared, on_error),
+        SampleFormat::U64 => open_stream::<u64>(&device, &config, consumer, shared, on_error),
+        SampleFormat::F64 => open_stream::<f64>(&device, &config, consumer, shared, on_error),
         other => Err(format!("unsupported sample format: {other:?}")),
     }?;
     Ok((stream, name))
@@ -163,14 +171,17 @@ where
         .build_output_stream(
             config,
             move |out: &mut [T], _info: &cpal::OutputCallbackInfo| {
-                if shared.paused_output.load(Ordering::Acquire) {
+                // Drain before pause: a flush requested while paused must
+                // empty the ring, or Stop from Paused would wait out the
+                // timeout and then play the stale samples.
+                if shared.drain_silent.load(Ordering::Acquire) {
+                    while consumer.pop().is_ok() {}
                     for slot in out.iter_mut() {
                         *slot = T::from_sample(0.0_f32);
                     }
                     return;
                 }
-                if shared.drain_silent.load(Ordering::Acquire) {
-                    while consumer.pop().is_ok() {}
+                if shared.paused_output.load(Ordering::Acquire) {
                     for slot in out.iter_mut() {
                         *slot = T::from_sample(0.0_f32);
                     }

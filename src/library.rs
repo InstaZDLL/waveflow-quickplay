@@ -230,8 +230,19 @@ fn decode_cover(bytes: &[u8]) -> Option<CoverImage> {
 
 /// Results of background reads, keyed by the queue entry they belong to.
 pub enum LoaderEvent {
-    Meta { id: u64, meta: TrackMeta },
-    Cover { id: u64, image: Option<CoverImage> },
+    Meta {
+        id: u64,
+        meta: TrackMeta,
+    },
+    Cover {
+        id: u64,
+        image: Option<CoverImage>,
+    },
+    /// Folders expanded off the UI thread (see [`Loader::request_scan`]).
+    Scanned {
+        paths: Vec<PathBuf>,
+        autoplay: bool,
+    },
 }
 
 /// Two worker threads: one walks the metadata queue in order, the other
@@ -240,6 +251,8 @@ pub enum LoaderEvent {
 pub struct Loader {
     meta_tx: Sender<(u64, PathBuf)>,
     cover_tx: Sender<(u64, PathBuf)>,
+    tx: Sender<LoaderEvent>,
+    notify: Arc<dyn Fn() + Send + Sync>,
     rx: Receiver<LoaderEvent>,
 }
 
@@ -249,6 +262,7 @@ impl Loader {
         let (meta_tx, meta_rx) = unbounded::<(u64, PathBuf)>();
         let (cover_tx, cover_rx) = unbounded::<(u64, PathBuf)>();
 
+        let (tx_events, notify_events) = (tx.clone(), notify.clone());
         let (tx_meta, notify_meta) = (tx.clone(), notify.clone());
         if let Err(err) = std::thread::Builder::new()
             .name("quickplay-metadata".into())
@@ -288,7 +302,27 @@ impl Loader {
         Self {
             meta_tx,
             cover_tx,
+            tx: tx_events,
+            notify: notify_events,
             rx,
+        }
+    }
+
+    /// Expands files and folders on a thread of its own: a dropped library
+    /// root can hold tens of thousands of entries, and the stats would
+    /// freeze the window if done on the UI thread.
+    pub fn request_scan(&self, inputs: Vec<PathBuf>, autoplay: bool) {
+        let (tx, notify) = (self.tx.clone(), self.notify.clone());
+        let spawned = std::thread::Builder::new()
+            .name("quickplay-scan".into())
+            .spawn(move || {
+                let paths = collect_audio_paths(&inputs);
+                if tx.send(LoaderEvent::Scanned { paths, autoplay }).is_ok() {
+                    notify();
+                }
+            });
+        if let Err(err) = spawned {
+            tracing::error!(%err, "scan thread failed to start");
         }
     }
 

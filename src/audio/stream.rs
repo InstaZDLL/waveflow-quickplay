@@ -45,10 +45,17 @@ enum Backend {
     },
 }
 
+/// Packets skipped in one `decode_next` call (foreign track, undecodable)
+/// before control goes back to the decoder loop, so a corrupt file still
+/// lets Stop / Seek / Shutdown through.
+const MAX_SKIPPED_PACKETS: usize = 64;
+
 pub struct ActiveStream {
     backend: Backend,
     resampler: Resampler,
     src_channels: usize,
+    /// The resampler tail has been flushed into the output after EOF.
+    tail_flushed: bool,
     src_sample_rate: u32,
     duration_ms: Option<u64>,
     codec: Option<String>,
@@ -122,6 +129,7 @@ impl ActiveStream {
             },
             resampler: Resampler::Passthrough,
             src_channels: 0,
+            tail_flushed: false,
             src_sample_rate: 0,
             duration_ms,
             codec,
@@ -155,6 +163,7 @@ impl ActiveStream {
             },
             resampler: Resampler::Passthrough,
             src_channels,
+            tail_flushed: false,
             src_sample_rate: 0,
             duration_ms,
             codec,
@@ -189,6 +198,7 @@ impl ActiveStream {
 
     /// Seek to `ms`; best-effort past EOF.
     pub fn seek_ms(&mut self, ms: u64) {
+        self.tail_flushed = false;
         match &mut self.backend {
             Backend::Symphonia {
                 format, track_id, ..
@@ -225,6 +235,8 @@ impl ActiveStream {
     /// channel-converted interleaved f32 samples into `out`. `Ok(true)` on
     /// end of stream, `Ok(false)` after a successful step (which may have
     /// produced no samples yet while the resampler or the FIR primes).
+    /// Decodes the next packet into `out`. `Ok(true)` once the track is
+    /// over, after the resampler's tail has been flushed into `out` too.
     pub fn decode_next(
         &mut self,
         out: &mut Vec<f32>,
@@ -232,6 +244,22 @@ impl ActiveStream {
         dst_rate: u32,
         dst_channels: usize,
     ) -> Result<bool, String> {
+        let done = self.decode_inner(out, scratch, dst_rate, dst_channels)?;
+        if done && !self.tail_flushed {
+            self.tail_flushed = true;
+            self.resampler.finish(out)?;
+        }
+        Ok(done)
+    }
+
+    fn decode_inner(
+        &mut self,
+        out: &mut Vec<f32>,
+        scratch: &mut Vec<f32>,
+        dst_rate: u32,
+        dst_channels: usize,
+    ) -> Result<bool, String> {
+        let mut skipped = 0usize;
         match &mut self.backend {
             Backend::Symphonia {
                 format,
@@ -242,7 +270,13 @@ impl ActiveStream {
             } => loop {
                 let packet = match format.next_packet() {
                     Ok(Some(p)) => p,
-                    Ok(None) | Err(SymphoniaError::ResetRequired) => return Ok(true),
+                    Ok(None) => return Ok(true),
+                    // A new logical stream (chained Ogg): fresh decoder state,
+                    // keep reading.
+                    Err(SymphoniaError::ResetRequired) => {
+                        decoder.reset();
+                        continue;
+                    }
                     Err(SymphoniaError::IoError(e))
                         if e.kind() == std::io::ErrorKind::UnexpectedEof =>
                     {
@@ -251,12 +285,20 @@ impl ActiveStream {
                     Err(e) => return Err(format!("next_packet: {e}")),
                 };
                 if packet.track_id != *track_id {
+                    skipped += 1;
+                    if skipped >= MAX_SKIPPED_PACKETS {
+                        return Ok(false);
+                    }
                     continue;
                 }
                 let buffer = match decoder.decode(&packet) {
                     Ok(b) => b,
                     Err(SymphoniaError::DecodeError(e)) => {
                         tracing::warn!(error = %e, "decode error, skipping packet");
+                        skipped += 1;
+                        if skipped >= MAX_SKIPPED_PACKETS {
+                            return Ok(false);
+                        }
                         continue;
                     }
                     Err(e) => return Err(format!("decode: {e}")),
@@ -553,6 +595,26 @@ impl Resampler {
                 Ok(())
             }
         }
+    }
+
+    /// At the end of the track: pad the queued remainder to a full chunk
+    /// and run it through, so the last frames and the filter delay are
+    /// heard instead of dropped. Costs at most one chunk of silence.
+    pub fn finish(&mut self, out: &mut Vec<f32>) -> Result<(), String> {
+        let pad = match self {
+            Self::Passthrough => return Ok(()),
+            Self::Fft {
+                inner,
+                channels,
+                pending,
+                ..
+            } => {
+                let need = (inner.input_frames_next() * *channels).max(1);
+                need - pending.len() % need
+            }
+        };
+        let zeros = vec![0.0_f32; pad];
+        self.process(&zeros, out)
     }
 
     /// Drop frames still queued and the filter history (after a seek), so

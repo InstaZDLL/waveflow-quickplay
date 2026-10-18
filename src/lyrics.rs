@@ -80,7 +80,8 @@ impl Lyrics {
         }
         // A positive offset shifts the lyrics earlier (LRC convention).
         for l in &mut raw {
-            l.at_ms = (l.at_ms as i64 - offset_ms).max(0) as u64;
+            let shifted = i128::from(l.at_ms) - i128::from(offset_ms);
+            l.at_ms = shifted.clamp(0, i128::from(u64::MAX)) as u64;
         }
         raw.sort_by_key(|l| l.at_ms);
         Some(Self { lines: raw })
@@ -131,7 +132,11 @@ fn parse_stamp(tag: &str) -> Option<u64> {
             }
         }
     };
-    Some(min * 60_000 + sec * 1000 + frac_ms)
+    // Checked: a sidecar is user data, and a huge number must not panic the
+    // UI thread in a debug build or wrap in release.
+    min.checked_mul(60_000)?
+        .checked_add(sec.checked_mul(1000)?)?
+        .checked_add(frac_ms)
 }
 
 /// Removes enhanced-LRC `<mm:ss.xx>` word stamps and collapses the spaces.
@@ -202,6 +207,22 @@ mod tests {
         assert_eq!(parse_stamp("01:02:05"), Some(62_050));
         assert_eq!(parse_stamp("ar:Artist"), None);
         assert_eq!(parse_stamp("offset:500"), None);
+        assert_eq!(
+            parse_stamp("18446744073709551615:00"),
+            None,
+            "overflow is rejected"
+        );
+        let l = Lyrics::parse(
+            "[offset:-9223372036854775808]
+[00:01.00]a
+",
+        )
+        .unwrap();
+        assert_eq!(
+            l.lines[0].at_ms,
+            1000 + 9_223_372_036_854_775_808,
+            "a huge negative offset neither panics nor wraps"
+        );
         let l = Lyrics::parse("[offset:500]\n[00:01.00]a\n").unwrap();
         assert_eq!(l.lines[0].at_ms, 500);
         let l = Lyrics::parse("[offset:-500]\n[00:01.00]a\n").unwrap();
