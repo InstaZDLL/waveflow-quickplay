@@ -82,6 +82,9 @@ pub struct QuickPlayApp {
     /// Last known minimized state of the main window, so the playlist can
     /// follow it down and back up (as PotPlayer does with its playlist).
     root_minimized: bool,
+    /// The main window has reported a position at least once; before that
+    /// a missing `outer_rect` says nothing about minimization (macOS path).
+    root_placed: bool,
     /// The playlist window is owned by the player (one taskbar button).
     playlist_attached: bool,
     /// Where the playlist sits relative to the player's top-right corner;
@@ -150,6 +153,7 @@ impl QuickPlayApp {
             playlist_pos: None,
             window_mode_applied: false,
             root_minimized: false,
+            root_placed: false,
             playlist_attached: false,
             playlist_offset: None,
             dock_anchor: None,
@@ -818,8 +822,34 @@ impl QuickPlayApp {
     /// going through [`Action::Minimize`]; the playlist follows every
     /// transition the backend reports, in both directions.
     fn sync_playlist_minimized(&mut self, ctx: &egui::Context) {
-        let Some(minimized) = ctx.input(|i| i.viewport().minimized) else {
-            return;
+        let (reported, has_rect) =
+            ctx.input(|i| (i.viewport().minimized, i.viewport().outer_rect.is_some()));
+        // On macOS egui-winit only polls the minimized state at window
+        // creation (egui#3494), so `minimized` never goes back to `false`
+        // after a restore from the Dock. It does drop the rects of a
+        // miniaturized window every frame, so a missing `outer_rect` is the
+        // live state there, once the window has been placed at all.
+        let minimized = if cfg!(target_os = "macos") {
+            if has_rect {
+                self.root_placed = true;
+            } else if !self.root_placed {
+                return;
+            }
+            let minimized = !has_rect;
+            // eframe keeps the stale `minimized = true` after a restore from
+            // the Dock and treats the window as invisible from then on: it
+            // runs the app logic but paints nothing and drops the close
+            // request, so the player looks frozen and `×` does nothing.
+            // Re-sending the (now true) state is the one way to update it.
+            if !minimized && self.root_minimized {
+                ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Minimized(false));
+            }
+            minimized
+        } else {
+            let Some(minimized) = reported else {
+                return;
+            };
+            minimized
         };
         if minimized != self.root_minimized {
             self.root_minimized = minimized;
