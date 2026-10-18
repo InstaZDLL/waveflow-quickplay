@@ -97,10 +97,18 @@ pub fn attach_owned_window(_owner_title: &str, _owned_title: &str) -> bool {
 /// there is one, gets that output back. No-op elsewhere.
 #[cfg(windows)]
 pub fn attach_parent_console() {
-    use windows_sys::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
-    // SAFETY: plain Win32 call; failure (no parent console) is harmless.
+    use windows_sys::Win32::System::Console::{
+        AttachConsole, GetStdHandle, ATTACH_PARENT_PROCESS, STD_OUTPUT_HANDLE,
+    };
+    // SAFETY: plain Win32 calls; a failed attach (no parent console) is
+    // harmless. Attaching replaces the standard handles, so it is only done
+    // when none was inherited: a redirect or a pipe (`> file`, `| less`)
+    // must keep going where the caller sent it.
     unsafe {
-        AttachConsole(ATTACH_PARENT_PROCESS);
+        let out = GetStdHandle(STD_OUTPUT_HANDLE);
+        if out.is_null() || out == windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE {
+            AttachConsole(ATTACH_PARENT_PROCESS);
+        }
     }
 }
 
