@@ -4,7 +4,7 @@
 use egui::{pos2, vec2, Align, Color32, Label, Layout, Rect, RichText, Ui};
 
 use super::icons::{self, Icon};
-use super::widgets::{bar_button, icon_button, slider, spectrum_bars};
+use super::widgets::{bar_button, icon_button, marquee, slider, spectrum_bars};
 use super::{format_time, theme, Action, PlayerView};
 use crate::audio::PlayerState;
 
@@ -72,7 +72,7 @@ pub fn controls(ui: &mut Ui, view: &PlayerView<'_>, actions: &mut Vec<Action>) {
                     .font(theme::bold(14.0))
                     .color(theme::TEXT_DIM)
             };
-            ui.add(Label::new(title).truncate());
+            marquee(ui, title, "title");
             let subtitle = if view.has_track {
                 match (view.artist, view.album) {
                     (Some(a), Some(b)) => format!("{a} · {b}"),

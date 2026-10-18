@@ -81,7 +81,9 @@ A `song.lrc` next to `song.flac` is read when the track starts and its
 timed lines replace the title in the controls block as the song plays (the
 window title keeps the track name). An empty timed line, or the gap before
 the first one, shows the title again. `[offset:]` and enhanced-LRC word
-stamps are honoured; nothing is fetched from the network.
+stamps are honoured; nothing is fetched from the network. A title or lyric
+line wider than its column holds for a moment, then scrolls across and
+comes round again, as PotPlayer's does.
 
 ## Architecture
 

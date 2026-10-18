@@ -394,3 +394,62 @@ fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
     let mix = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
     Color32::from_rgb(mix(a.r(), b.r()), mix(a.g(), b.g()), mix(a.b(), b.b()))
 }
+
+/// A single line of text that scrolls horizontally when it is wider than
+/// the space it gets (PotPlayer's title / lyric line). Short text is drawn
+/// as a plain label. Long text holds still for a moment, scrolls left at a
+/// steady pace with a gap before it comes round again, and starts over
+/// whenever the text changes, so every lyric line is read from its start.
+pub fn marquee(ui: &mut Ui, text: RichText, id: &str) -> Response {
+    const HOLD_SECS: f64 = 1.5;
+    const SPEED: f64 = 28.0; // points per second
+    const GAP: f32 = 48.0;
+
+    let width = ui.available_width();
+    let galley = egui::WidgetText::from(text).into_galley(
+        ui,
+        Some(egui::TextWrapMode::Extend),
+        f32::INFINITY,
+        egui::TextStyle::Body,
+    );
+    let text_w = galley.size().x;
+    let (rect, response) = ui.allocate_exact_size(vec2(width, galley.size().y), Sense::hover());
+    if !ui.is_rect_visible(rect) {
+        return response;
+    }
+    let painter = ui.painter().with_clip_rect(rect);
+    if text_w <= width {
+        painter.galley(rect.left_top(), galley, theme::TEXT);
+        return response;
+    }
+
+    // Phase of the animation, restarted when the text changes.
+    let key = response.id.with(id);
+    let hash = {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        galley.job.text.hash(&mut h);
+        h.finish()
+    };
+    let now = ui.input(|i| i.time);
+    let start = ui.ctx().data_mut(|d| {
+        let (h, t) = d.get_temp::<(u64, f64)>(key).unwrap_or((0, now));
+        if h != hash {
+            d.insert_temp(key, (hash, now));
+            now
+        } else {
+            t
+        }
+    });
+    let travel = (text_w + GAP) as f64;
+    let period = HOLD_SECS + travel / SPEED;
+    let phase = (now - start) % period;
+    let offset = ((phase - HOLD_SECS).max(0.0) * SPEED) as f32;
+
+    let origin = pos2(rect.left() - offset, rect.top());
+    painter.galley(origin, galley.clone(), theme::TEXT);
+    painter.galley(origin + vec2(text_w + GAP, 0.0), galley, theme::TEXT);
+    ui.ctx()
+        .request_repaint_after(std::time::Duration::from_millis(16));
+    response
+}
