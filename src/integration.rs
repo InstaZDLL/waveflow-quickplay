@@ -16,8 +16,6 @@
 use std::io;
 use std::path::PathBuf;
 
-use waveflow_core::scanner::extract::AUDIO_EXTENSIONS;
-
 pub const PLAY_LABEL: &str = "Play with WaveFlow QuickPlay";
 pub const ENQUEUE_LABEL: &str = "Add to WaveFlow QuickPlay playlist";
 
@@ -41,6 +39,7 @@ pub fn unregister() -> io::Result<String> {
 mod platform {
     use super::*;
     use std::process::Command;
+    use waveflow_core::scanner::extract::AUDIO_EXTENSIONS;
 
     const PLAY_VERB: &str = "WaveFlowQuickPlay.Play";
     const ENQUEUE_VERB: &str = "WaveFlowQuickPlay.Enqueue";
@@ -274,9 +273,10 @@ mod platform {
 
     pub fn unregister() -> io::Result<String> {
         for p in [desktop_file()?, icon_file()?] {
-            match std::fs::remove_file(&p) {
-                Ok(()) | Err(_) if !p.exists() => {}
-                Err(e) => return Err(e),
+            if let Err(e) = std::fs::remove_file(&p) {
+                if p.exists() {
+                    return Err(e);
+                }
             }
         }
         refresh();

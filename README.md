@@ -9,7 +9,13 @@ companion to WaveFlow Desktop.
 waveflow-quickplay "C:\Music\song.flac"
 waveflow-quickplay song1.flac song2.mp3 song3.m4a
 waveflow-quickplay "C:\Music\Some Album"      # folders are walked (4 levels)
+waveflow-quickplay --enqueue more.flac        # append to the running player's queue
+waveflow-quickplay --register                 # file-manager integration (see below)
 ```
+
+One instance per user: a second launch hands its files to the running
+player and exits. Without `--enqueue` the files replace the queue and play,
+as PotPlayer's "Play with" does; with it they are appended.
 
 ## Build and run
 

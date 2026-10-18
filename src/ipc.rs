@@ -2,9 +2,12 @@
 //! and exits, so "Play with" / "Add to playlist" from the file manager land
 //! in the open window instead of opening another one (what PotPlayer does).
 //!
-//! Transport: one local socket per user — a named pipe on Windows, an
-//! abstract Unix socket on Linux, a socket file in the runtime directory
-//! elsewhere. Protocol, UTF-8 lines: `play` or `enqueue`, one absolute path
+//! Transport: one local socket per user. A socket file in the per-user,
+//! mode-0700 runtime directory (`$XDG_RUNTIME_DIR`) where there is one,
+//! so no other local user can reach or squat it; a named pipe on Windows,
+//! whose default DACL lets only the owner write; the abstract namespace
+//! only as a last resort. Messages are capped in size and count. What
+//! crosses the socket is a list of file paths to play, nothing secret. Protocol, UTF-8 lines: `play` or `enqueue`, one absolute path
 //! per line, an empty line; the server answers `ok` once it has queued the
 //! message, so the client can exit knowing the files were taken.
 
@@ -49,10 +52,13 @@ fn socket_name() -> io::Result<(Name<'static>, Option<PathBuf>)> {
         .or_else(|_| std::env::var("USERNAME"))
         .unwrap_or_else(|_| "default".into());
     let base = format!("waveflow-quickplay-{user}.sock");
-    if GenericNamespaced::is_supported() {
+    // Per-user private directory first (0700 by the XDG spec); the abstract
+    // namespace is host-wide and only used when there is none.
+    let private_dir = dirs::runtime_dir().filter(|d| d.is_dir());
+    if cfg!(windows) || (private_dir.is_none() && GenericNamespaced::is_supported()) {
         Ok((base.to_ns_name::<GenericNamespaced>()?, None))
     } else {
-        let dir = dirs::runtime_dir()
+        let dir = private_dir
             .or_else(dirs::cache_dir)
             .unwrap_or_else(std::env::temp_dir);
         let path = dir.join(base);
@@ -182,7 +188,12 @@ fn serve(listener: interprocess::local_socket::Listener, tx: Sender<Message>, ct
     }
 }
 
+/// Upper bounds on one message: paths are short, bursts are per file.
+const MAX_MESSAGE_BYTES: u64 = 4 << 20;
+const MAX_PATHS: usize = 10_000;
+
 fn read_message<R: BufRead>(reader: &mut R) -> Option<Message> {
+    let mut reader = reader.take(MAX_MESSAGE_BYTES);
     let mut line = String::new();
     if reader.read_line(&mut line).ok()? == 0 {
         return None;
@@ -200,7 +211,7 @@ fn read_message<R: BufRead>(reader: &mut R) -> Option<Message> {
         line.clear();
         let n = reader.read_line(&mut line).unwrap_or(0);
         let path = line.trim_end_matches(['\r', '\n']);
-        if n == 0 || path.is_empty() {
+        if n == 0 || path.is_empty() || paths.len() >= MAX_PATHS {
             break;
         }
         paths.push(PathBuf::from(path));
