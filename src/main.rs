@@ -16,6 +16,7 @@ mod app;
 mod audio;
 mod config;
 mod library;
+mod platform;
 mod queue;
 mod ui;
 
@@ -74,7 +75,7 @@ fn main() -> eframe::Result {
         )
     };
     let mut viewport = egui::ViewportBuilder::default()
-        .with_title("WaveFlow QuickPlay")
+        .with_title(app::MAIN_TITLE)
         .with_app_id(APP_ID)
         .with_inner_size(inner)
         .with_min_inner_size([config::MIN_WIDTH, COMPACT_HEIGHT])

@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use egui::{
-    Pos2, TextureHandle, Vec2, ViewportBuilder, ViewportClass, ViewportCommand, ViewportId,
+    Pos2, Rect, TextureHandle, Vec2, ViewportBuilder, ViewportClass, ViewportCommand, ViewportId,
 };
 
 use crate::audio::{AudioCmd, AudioEngine, EngineEvent, PlayerState};
@@ -20,6 +20,13 @@ use crate::ui::{
 };
 
 pub const APP_ID: &str = "app.waveflow.quickplay";
+pub const MAIN_TITLE: &str = "WaveFlow QuickPlay";
+pub const PLAYLIST_TITLE: &str = "Playlist · WaveFlow QuickPlay";
+/// A playlist that lands within this distance of where the player sent it
+/// is our own move arriving, not the user dragging it.
+const DOCK_TOLERANCE: f32 = 2.0;
+/// Space left between the player and a freshly opened playlist.
+const DOCK_GAP: f32 = 8.0;
 
 /// Position-display cadence while playing — the desktop's `player:position`
 /// rate. Idle and paused repaint only on input.
@@ -72,6 +79,16 @@ pub struct QuickPlayApp {
     /// Last known minimized state of the main window, so the playlist can
     /// follow it down and back up (as PotPlayer does with its playlist).
     root_minimized: bool,
+    /// The playlist window is owned by the player (one taskbar button).
+    playlist_attached: bool,
+    /// Where the playlist sits relative to the player's top-right corner;
+    /// the player carries it along when it moves or widens.
+    playlist_offset: Option<Vec2>,
+    /// The player's top-right corner last frame.
+    dock_anchor: Option<Pos2>,
+    /// The playlist's position last frame, and where we last sent it.
+    playlist_last_pos: Option<Pos2>,
+    playlist_expected_pos: Option<Pos2>,
     /// Smoothed bar heights shown by the visualizer.
     spectrum: Vec<f32>,
     /// The last frame taken, which the bars ease toward.
@@ -105,6 +122,11 @@ impl QuickPlayApp {
             playlist_pos: None,
             window_mode_applied: false,
             root_minimized: false,
+            playlist_attached: false,
+            playlist_offset: None,
+            dock_anchor: None,
+            playlist_last_pos: None,
+            playlist_expected_pos: None,
             spectrum: vec![0.0; crate::audio::spectrum::BAND_COUNT],
             spectrum_target: vec![0.0; crate::audio::spectrum::BAND_COUNT],
             spectrum_tick: Instant::now(),
@@ -576,7 +598,7 @@ impl QuickPlayApp {
             // Beside the player, if the backend tells us where that is.
             self.playlist_pos = ctx
                 .input(|i| i.viewport().outer_rect)
-                .map(|r| Pos2::new(r.right() + 8.0, r.top()));
+                .map(|r| Pos2::new(r.right() + DOCK_GAP, r.top()));
         }
         self.settings.save();
     }
@@ -738,8 +760,10 @@ impl QuickPlayApp {
         let id = Self::playlist_viewport_id();
         let [w, h] = self.settings.playlist_size;
         let mut builder = ViewportBuilder::default()
-            .with_title("Playlist · WaveFlow QuickPlay")
+            .with_title(PLAYLIST_TITLE)
             .with_app_id(APP_ID)
+            // One taskbar button for the pair, as PotPlayer's playlist.
+            .with_taskbar(false)
             .with_inner_size([w, h])
             .with_min_inner_size([240.0, 160.0])
             .with_drag_and_drop(true)
@@ -751,6 +775,7 @@ impl QuickPlayApp {
         let queue = &self.queue;
         let selected = self.selected;
         let mut size: Option<Vec2> = None;
+        let mut outer: Option<Rect> = None;
         let mut dropped: Vec<PathBuf> = Vec::new();
         let close = ctx.show_viewport_immediate(id, builder, |ui, class| {
             let close = ui.ctx().input(|i| i.viewport().close_requested());
@@ -759,6 +784,7 @@ impl QuickPlayApp {
                     .ctx()
                     .input(|i| i.viewport().inner_rect)
                     .map(|r| r.size());
+                outer = ui.ctx().input(|i| i.viewport().outer_rect);
                 dropped = ui.ctx().input(|i| {
                     i.raw
                         .dropped_files
@@ -782,7 +808,75 @@ impl QuickPlayApp {
         if close {
             self.settings.show_playlist = false;
             self.settings.save();
+        } else if outer.is_some() {
+            if !self.playlist_attached {
+                self.playlist_attached =
+                    crate::platform::attach_owned_window(MAIN_TITLE, PLAYLIST_TITLE);
+            }
+            self.dock_playlist(ctx, outer);
         }
+    }
+
+    /// Forgets the playlist window: egui destroys it when it is not shown
+    /// for a frame, so the next one needs attaching and anchoring afresh.
+    fn forget_playlist_window(&mut self) {
+        self.playlist_attached = false;
+        self.dock_anchor = None;
+        self.playlist_last_pos = None;
+        self.playlist_expected_pos = None;
+    }
+
+    /// Keeps the playlist where the user put it *relative to the player*:
+    /// when the player moves or widens, the playlist is sent along; when the
+    /// playlist alone moves, the new offset is remembered. `None` rects and
+    /// the off-screen rect a minimized window reports are ignored.
+    fn dock_playlist(&mut self, ctx: &egui::Context, playlist: Option<Rect>) {
+        let main = ctx.input(|i| i.viewport().outer_rect);
+        let (Some(main), Some(playlist)) = (main, playlist) else {
+            return;
+        };
+        if self.root_minimized || main.min.x < -10_000.0 || playlist.min.x < -10_000.0 {
+            self.dock_anchor = None;
+            return;
+        }
+        let anchor = main.right_top();
+        match (self.dock_anchor, self.playlist_offset) {
+            (Some(prev), Some(offset)) if prev != anchor => {
+                let target = anchor + offset;
+                ctx.send_viewport_cmd_to(
+                    Self::playlist_viewport_id(),
+                    ViewportCommand::OuterPosition(target),
+                );
+                self.playlist_expected_pos = Some(target);
+            }
+            _ if self.playlist_offset.is_none() => {
+                // First sight of this window: put it beside the player, whatever
+                // the backend made of the builder position hint.
+                let offset = Vec2::new(DOCK_GAP, 0.0);
+                let target = anchor + offset;
+                self.playlist_offset = Some(offset);
+                if (playlist.min - target).length() > DOCK_TOLERANCE {
+                    ctx.send_viewport_cmd_to(
+                        Self::playlist_viewport_id(),
+                        ViewportCommand::OuterPosition(target),
+                    );
+                    self.playlist_expected_pos = Some(target);
+                }
+            }
+            _ => {
+                if self.playlist_last_pos != Some(playlist.min) {
+                    let ours = self
+                        .playlist_expected_pos
+                        .take()
+                        .is_some_and(|e| (playlist.min - e).length() <= DOCK_TOLERANCE);
+                    if !ours {
+                        self.playlist_offset = Some(playlist.min - anchor);
+                    }
+                }
+            }
+        }
+        self.dock_anchor = Some(anchor);
+        self.playlist_last_pos = Some(playlist.min);
     }
 }
 
@@ -866,6 +960,8 @@ impl eframe::App for QuickPlayApp {
         if self.settings.show_playlist {
             let ctx = ui.ctx().clone();
             self.show_playlist_viewport(&ctx, &mut actions);
+        } else if self.playlist_attached {
+            self.forget_playlist_window();
         }
 
         for action in actions {

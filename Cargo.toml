@@ -86,6 +86,15 @@ serde_json = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
+[target.'cfg(windows)'.dependencies]
+# Owner relationship between the playlist window and the player (one taskbar
+# button, minimized together); same version winit already pulls.
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
 [build-dependencies]
 # Embeds the icon + VERSIONINFO into the Windows executable only; a no-op
 # elsewhere (see build.rs).

@@ -63,6 +63,7 @@ waveflow-quickplay
    ├── src/app.rs         QuickPlayApp: queue + engine + loader + window state, applies UI actions
    ├── src/audio/         the playback pipeline (see below)
    ├── src/library.rs     tags / duration / cover reads on two worker threads
+   ├── src/platform.rs    Windows: owner link between the playlist window and the player
    ├── src/queue.rs       the playlist model
    ├── src/config.rs      settings.json
    └── src/ui/            theme, painted icons, widgets, player pane, playlist window
@@ -113,10 +114,16 @@ resize edges — `with_decorations(false)` plus `ViewportCommand::StartDrag`
 / `BeginResize`. Compact mode locks the height to the controls block;
 artwork mode adds the cover above it and makes the window freely
 resizable. The playlist is a second native window (`show_viewport_immediate`)
-placed beside the player; it minimizes and restores together with the player
-(whether through the `-` button, the taskbar or Win+D), as PotPlayer's
-playlist does. Where the backend cannot open a second window, egui embeds it
-as a floating panel instead.
+docked beside the player, as PotPlayer's playlist is: it keeps its offset
+from the player's top-right corner when the player is moved or widened
+(drag the playlist itself to change that offset), it minimizes and restores
+with the player (`-` button, taskbar or Win+D), and it has no taskbar button
+of its own. On Windows the playlist is made an *owned* window of the player
+(`src/platform.rs`, the one native call egui does not wrap), which is what
+gives the pair a single taskbar entry and a shared z-order; elsewhere the
+docking and minimize mirroring are done from the app and the window only
+skips the taskbar. Where the backend cannot open a second window at all,
+egui embeds it as a floating panel instead.
 
 ## Measurements
 
