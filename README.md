@@ -1,27 +1,162 @@
-# WaveFlow QuickPlay
+<!-- markdownlint-disable MD033 MD041 -->
+<p align="center">
+  <img src="assets/icon-128.png" width="96" alt="WaveFlow QuickPlay logo" />
+</p>
 
-A standalone, lightweight audio player for WaveFlow — a native egui/eframe
-window that plays local files without launching the Tauri desktop app.
-Experimental: its purpose is to evaluate whether egui + eframe is a practical
-companion to WaveFlow Desktop.
+<h1 align="center">WaveFlow QuickPlay</h1>
+
+<p align="center">
+  <strong>Double-click a track, hear it now — WaveFlow's audio engine in a native window that opens in a quarter of a second.</strong>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/version-0.1.0-10b981?style=flat-square" alt="Version 0.1.0" />
+  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey?style=flat-square" alt="Windows and Linux" />
+  <img src="https://img.shields.io/badge/rust-1.98-orange?style=flat-square&logo=rust" alt="Rust 1.98" />
+  <img src="https://img.shields.io/badge/UI-egui%20%2F%20eframe%200.36-2563eb?style=flat-square" alt="egui / eframe 0.36" />
+  <img src="https://img.shields.io/badge/startup-%3C%20300%20ms-10b981?style=flat-square" alt="Starts in under 300 ms" />
+  <img src="https://img.shields.io/badge/tests-24%20passing-2ea44f?style=flat-square" alt="24 tests passing" />
+  <img src="https://img.shields.io/badge/license-GPL--3.0-green?style=flat-square" alt="GPL-3.0" />
+</p>
+
+<p align="center">
+  QuickPlay is the small player that sits next to <a href="https://github.com/InstaZDLL/WaveFlow">WaveFlow</a>. When you only want to hear a file, not manage a library, it plays it from the Explorer context menu or a double-click, with the same decoders the desktop app uses — Opus and DSD included — in a window the size of a notification. No database, no scan, no account.
+</p>
+
+<p align="center">
+  <a href="#install"><b>Install</b></a>
+  &nbsp;·&nbsp;
+  <a href="#features"><b>Features</b></a>
+  &nbsp;·&nbsp;
+  <a href="#screenshots"><b>Screenshots</b></a>
+  &nbsp;·&nbsp;
+  <a href="#keyboard"><b>Keyboard</b></a>
+  &nbsp;·&nbsp;
+  <a href="#build-and-test"><b>Build</b></a>
+  &nbsp;·&nbsp;
+  <a href="#architecture"><b>Architecture</b></a>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/player-and-playlist.png" width="788" alt="QuickPlay in artwork mode playing Feel Special, the synced lyric line replacing the title, the spectrum running, and the playlist window docked to its right" />
+  <br />
+  <sub><b>Artwork mode</b> · synced lyric in place of the title, spectrum, and the playlist docked beside the player</sub>
+</p>
+
+---
+
+## Why QuickPlay
+
+<table>
+  <tr>
+    <td>⚡&nbsp;<b>Instant</b></td>
+    <td>First frame in 62 ms on Linux and under 300 ms on Windows, audio engine created lazily on the first play. The release binary is one file, 31 MB, half of it the CJK font.</td>
+  </tr>
+  <tr>
+    <td>🎛️&nbsp;<b>Same sound as WaveFlow</b></td>
+    <td>It links the desktop app's own <code>waveflow-core</code>: one codec registry (symphonia + libopus), the same DSD converter, the same resampler and lock-free ring between decoder and device.</td>
+  </tr>
+  <tr>
+    <td>🪟&nbsp;<b>Behaves like a native player</b></td>
+    <td>One instance per user, "Play with" / "Add to playlist" in the file manager, a playlist window that moves, minimizes and restores with the player, one taskbar entry for the pair.</td>
+  </tr>
+  <tr>
+    <td>🚫&nbsp;<b>Deliberately small</b></td>
+    <td>No EQ, crossfade, gapless, ReplayGain, device picker or exclusive mode. Those live in WaveFlow Desktop; QuickPlay plays the file.</td>
+  </tr>
+</table>
+
+## Features
+
+### 🎧 Playback
+
+- **Every format the desktop plays**: MP3, FLAC, WAV, AIFF, Vorbis, Opus, AAC, ALAC, DSF and DFF, through `waveflow_core::audio_format::opus::codecs()`.
+- **Files and folders** from the command line, a drop on either window or the open dialog; folders are walked four levels deep on a background thread.
+- **Instant pause, clean seeks**: the cpal callback never allocates, locks or logs; pause and flush are atomics it reads, as in the desktop engine.
+- **Auto-advance** with the track's tail played out, broken files skipped and marked in the playlist.
+- **Spectrum** timed to the output clock, so the bars follow what is heard, not what is decoded.
+
+### 🖼️ Two sizes, one window
+
+- **Compact**: clock, title, format chips, seek, volume and transport in 440 × 154 points. Height locked, width free.
+- **Artwork**: the cover above the controls, edge to edge, freely resizable. Press `A` or the artwork button to switch.
+- Custom title bar with pin (always on top), minimize and close; window size and mode are remembered.
+
+### 📋 Playlist
+
+- A second native window (`show_viewport_immediate`) placed beside the player, virtualised for long queues, with number, title, artist, duration, the current row in the accent colour and failed rows flagged.
+- **Docked**: it keeps its offset from the player's top-right corner when the player moves or widens, drag it to change that offset. It minimizes and restores with the player and has no taskbar button of its own; on Windows it is an owned window of the player.
+- Double-click to play, right-click for Play / Remove, `Delete` to remove, add / remove / clear in the toolbar.
+
+### 🎤 Lyrics
+
+- A `song.lrc` next to `song.flac` is read when the track starts; the line in force replaces the title as the song plays, and an empty line, or the lead-in, shows the title again, as PotPlayer does.
+- `[offset:]` and enhanced-LRC word stamps are honoured; nothing is fetched from the network.
+- A title or lyric line wider than its column holds for a moment, then scrolls across and comes round again.
+
+### 🖱️ From the file manager
+
+- **One instance per user**: a second launch hands its files to the running player over a local socket and exits. Plain launch replaces the queue and plays, `--enqueue` appends; a multi-selection that Explorer starts as one process per file is merged.
+- `waveflow-quickplay --register` adds *Play with WaveFlow QuickPlay* and *Add to WaveFlow QuickPlay playlist* to the context menu of every audio extension and of folders, plus an "Open with" entry, for the current user and without administrator rights. On Linux it writes a `.desktop` entry with the audio MIME types. `--unregister` removes it all.
+- The default handler for the extensions is left to you (Settings › Default apps, or `xdg-mime default app.waveflow.quickplay.desktop audio/flac`).
+
+### ✨ And also
+
+- Inter and Noto Sans CJK are embedded: Japanese, Korean and Chinese titles render the same on every machine.
+- Preferences live in their own namespace, `<config dir>/waveflow-quickplay/settings.json`, never read by the desktop app.
+- `RUST_LOG=debug` turns the log up; `QUICKPLAY_CAPTURE_DIR=<dir>` writes a PNG of the player window 2 s after start, for displays that cannot be grabbed from outside such as GNOME on Wayland.
+
+## Screenshots
+
+<table>
+  <tr>
+    <td width="50%" align="center" valign="top"><img src="docs/screenshots/player-compact.png" alt="Compact mode: clock, the current lyric line, format chips, spectrum, seek bar, volume and transport in a 440 by 154 window" /></td>
+    <td width="50%" align="center" valign="top"><img src="docs/screenshots/player-expanded.png" width="330" alt="Artwork mode: the cover above the same controls block" /></td>
+  </tr>
+  <tr>
+    <td align="center"><sub><b>Compact</b> · the whole player in 440 × 154</sub></td>
+    <td align="center"><sub><b>Artwork</b> · the cover edge to edge, window freely resizable</sub></td>
+  </tr>
+</table>
+
+## Install
+
+QuickPlay is built from source for now (see [Build and test](#build-and-test)); the binary is a single file you can copy anywhere.
 
 ```text
 waveflow-quickplay "C:\Music\song.flac"
 waveflow-quickplay song1.flac song2.mp3 song3.m4a
 waveflow-quickplay "C:\Music\Some Album"      # folders are walked (4 levels)
 waveflow-quickplay --enqueue more.flac        # append to the running player's queue
-waveflow-quickplay --register                 # file-manager integration (see below)
+waveflow-quickplay --register                 # file-manager integration, current user
+waveflow-quickplay --unregister
 ```
 
-One instance per user: a second launch hands its files to the running
-player and exits. Without `--enqueue` the files replace the queue and play,
-as PotPlayer's "Play with" does; with it they are appended.
+Move the binary, run `--register` again from its new place: the registry entries and the `.desktop` file point at the executable's path.
 
-## Build and run
+## Keyboard
+
+| Key                 | Action                      |
+| ------------------- | --------------------------- |
+| Space               | Play / pause                |
+| N / P               | Next / previous             |
+| ← / → (Shift: 30 s) | Seek ±5 s                   |
+| ↑ / ↓               | Volume ±5 %                 |
+| A                   | Show / hide the artwork     |
+| L                   | Show / hide the playlist    |
+| S (or click it)     | Show / hide the spectrum    |
+| T                   | Always on top               |
+| Ctrl+O              | Open files                  |
+| Delete (playlist)   | Remove the selected track   |
+
+Shortcuts work whichever of the two windows has focus.
+
+## Build and test
 
 Requirements: the WaveFlow repository checked out next to this folder
 (`../WaveFlow`), Rust 1.98 (pinned by `rust-toolchain.toml`) and cmake (for
 the vendored libopus that `waveflow-core` builds, as the desktop app does).
+On Linux add the GTK 3 and ALSA development packages (file dialog, audio).
 
 ```bash
 cargo run --release -- <files or folders>
@@ -29,61 +164,8 @@ cargo build --release          # → target/release/waveflow-quickplay(.exe)
 
 cargo fmt --check
 cargo clippy --all-targets
-cargo test
+cargo test                     # 24 tests
 ```
-
-`RUST_LOG=debug` turns the log up (stderr). `QUICKPLAY_CAPTURE_DIR=<dir>` writes a
-PNG of the player window (`player.png`) 2 s after start (or
-`QUICKPLAY_CAPTURE_AFTER_MS`), for testing on displays that cannot be grabbed
-from outside such as GNOME on Wayland. Preferences live in
-`<config dir>/waveflow-quickplay/settings.json` (`%APPDATA%` on Windows,
-`~/.config` on Linux) — a namespace of its own, never read by the desktop
-app.
-
-### Keyboard
-
-| Key                | Action                       |
-| ------------------ | ---------------------------- |
-| Space              | Play / pause                 |
-| N / P              | Next / previous              |
-| ← / → (Shift: 30 s) | Seek ±5 s                    |
-| ↑ / ↓              | Volume ±5 %                  |
-| A                  | Show / hide the artwork      |
-| L                  | Show / hide the playlist     |
-| S (or click it)    | Show / hide the spectrum     |
-| T                  | Always on top                |
-| Ctrl+O             | Open files                   |
-| Delete (playlist)  | Remove the selected track    |
-
-Files and folders can be dropped on either window; double-click a playlist
-row to play it; right-click for Play / Remove.
-
-### File manager integration
-
-`waveflow-quickplay --register` (and `--unregister`) works per user, no
-administrator rights, no installer:
-
-- **Windows**: two context-menu entries on every audio extension and on
-  folders, "Play with WaveFlow QuickPlay" and "Add to WaveFlow QuickPlay
-  playlist", plus an "Open with" entry. Keys live under
-  `HKCU\Software\Classes`; the default handler for the extensions is not
-  changed (Settings › Default apps does that). A multi-selection launches
-  one process per file; the single-instance socket merges them.
-- **Linux**: `~/.local/share/applications/app.waveflow.quickplay.desktop`
-  with the audio MIME types and an "Add to playlist" action, plus the icon.
-  QuickPlay then appears in "Open with"; `xdg-mime default
-  app.waveflow.quickplay.desktop audio/flac` makes it the default per type.
-- **macOS**: not available from a bare binary (needs an app bundle).
-
-### Lyrics
-
-A `song.lrc` next to `song.flac` is read when the track starts and its
-timed lines replace the title in the controls block as the song plays (the
-window title keeps the track name). An empty timed line, or the gap before
-the first one, shows the title again. `[offset:]` and enhanced-LRC word
-stamps are honoured; nothing is fetched from the network. A title or lyric
-line wider than its column holds for a moment, then scrolls across and
-comes round again, as PotPlayer's does.
 
 ## Architecture
 
@@ -95,16 +177,16 @@ WaveFlow/src-tauri/crates/core   (waveflow-core, path dependency)
                                       read_tagged_file, probe_playable_stream, file_type_label
 
 waveflow-quickplay
-   ├── src/main.rs        CLI, logging, eframe window
+   ├── src/main.rs        CLI, single-instance hand-over, logging, eframe window
    ├── src/app.rs         QuickPlayApp: queue + engine + loader + window state, applies UI actions
    ├── src/audio/         the playback pipeline (see below)
-   ├── src/library.rs     tags / duration / cover reads on two worker threads
+   ├── src/library.rs     tags / duration / cover reads and folder scans on worker threads
    ├── src/lyrics.rs      .lrc sidecar parser, line in force at a position
-   ├── src/platform.rs    Windows: owner link between the playlist window and the player
    ├── src/queue.rs       the playlist model
    ├── src/config.rs      settings.json
    ├── src/ipc.rs         single instance: local socket, play / enqueue hand-over
    ├── src/integration.rs --register / --unregister (registry verbs, .desktop file)
+   ├── src/platform.rs    Windows: owner link between the playlist window and the player
    └── src/ui/            theme, painted icons, widgets, player pane, playlist window
 ```
 
@@ -129,19 +211,18 @@ UI thread (egui)  ──AudioCmd (crossbeam)──►  decoder thread (std)  ─
 
 - the cpal callback never allocates, locks or logs; it pops the ring,
   applies the volume and advances `samples_played`, the only position clock;
-- `paused_output` (silence, no pop) and `drain_silent` (bulk pop + silence)
-  give instant pause and clean seeks, as in the desktop engine;
+- `drain_silent` (bulk pop + silence) and `paused_output` (silence, no pop)
+  give clean seeks and instant pause, as in the desktop engine; the callback
+  tests the drain first, so a flush requested while paused still empties the ring;
 - streams open through `waveflow_core::audio_format::opus::codecs()`, so
-  QuickPlay plays exactly the formats the desktop plays, Opus included
-  (MP3, FLAC, WAV, AIFF, Vorbis, Opus, AAC, ALAC, DSF, DFF);
-- a track ends only once its tail has left the ring; the UI then loads the
-  next queue entry;
-- the engine is created lazily on the first load and released (decoder
-  joined, stream dropped) on exit;
+  QuickPlay plays exactly the formats the desktop plays, Opus included;
+- a track ends only once its tail has left the ring, resampler delay
+  included; the UI then loads the next queue entry;
+- the engine is created lazily on the first load, released on exit, and
+  released on an output-stream error so the next play reopens the device;
 - the spectrum analyser (`src/audio/spectrum.rs`, the desktop's FFT and
   band ladder without the Tauri emit) runs on the decoder thread and
-  timestamps every frame with the output position it belongs to, so the
-  bars follow what is heard rather than what is decoded.
+  timestamps every frame with the output position it belongs to.
 
 What is deliberately **not** here: crossfade, gapless, ReplayGain, EQ,
 exclusive output, device selection, radio / remote sources, analytics.
@@ -159,10 +240,11 @@ from the player's top-right corner when the player is moved or widened
 with the player (`-` button, taskbar or Win+D), and it has no taskbar button
 of its own. On Windows the playlist is made an *owned* window of the player
 (`src/platform.rs`, the one native call egui does not wrap), which is what
-gives the pair a single taskbar entry and a shared z-order; elsewhere the
-docking and minimize mirroring are done from the app and the window only
-skips the taskbar. Where the backend cannot open a second window at all,
-egui embeds it as a floating panel instead.
+gives the pair a single taskbar entry and a shared z-order; on X11 it
+declares the utility window type, which taskbars skip too. Wayland does not
+let an application position its windows, so there the playlist opens where
+the compositor puts it and does not follow the player. Where the backend
+cannot open a second window at all, egui embeds it as a floating panel.
 
 ## Measurements
 
@@ -190,22 +272,23 @@ profile, same file, stereo 44.1 kHz output, 2026-10-18:
 | Release binary                           | 33.1 MB | `target/release/waveflow-quickplay`                         |
 | Clean release build                      | 2 min 42 s | 8 cores, cmake + libopus included                        |
 
-Verified there: rendering (fonts, cover, spectrum) identical to Windows,
-Opus / AAC / FLAC playback, the playlist window opening beside the player,
-and under XWayland the playlist following the player when it is moved
-(`wmctrl`). Wayland does not let an application position its windows, so
-the playlist opens where GNOME puts it and does not follow the player.
+Verified there: rendering identical to Windows, Opus / AAC / FLAC playback,
+the single-instance hand-over over the Unix socket, `--register` showing up
+in "Open with", and under XWayland the playlist following the player.
 
 The working set is dominated by the OpenGL driver and the decoded cover
 (up to 1024² RGBA); the audio threads themselves are small.
 
 ## Known limitations
 
-- Fonts: Inter (Regular + SemiBold, the desktop app's face) and Noto Sans
-  CJK (Chinese, Japanese, Korean) are embedded; a system face is appended as
-  a last fallback for anything else. The CJK file is 16 MB of the binary.
-- Output device: the OS default, opened at its default configuration
-  (shared mode). No device picker, no exclusive mode.
+- **macOS** is untested, and file associations there need an application
+  bundle; `--register` says so and does nothing.
+- **Output device**: the OS default, opened at its default configuration
+  (shared mode). No device picker, no exclusive mode. If the device goes
+  away, the engine is released and the next play reopens the new default.
+- **Fonts**: Inter and Noto Sans CJK are embedded; a system face is
+  appended as a last fallback for anything else. The CJK file is 16 MB of
+  the binary.
 - The `[patch.crates-io] glib` RUSTSEC backport of the WaveFlow workspace
   does not apply here (patches must sit at the workspace root); only Linux
   builds pull glib, through rfd's GTK dialog.
@@ -220,3 +303,26 @@ The working set is dominated by the OpenGL driver and the decoded cover
 | `assets/fonts/Inter-Regular.ttf`, `Inter-SemiBold.ttf` | The Inter Project Authors | https://github.com/rsms/inter | OFL-1.1 (`assets/fonts/OFL-Inter.txt`) |
 | `assets/fonts/NotoSansCJKsc-Regular.otf` | Google, Adobe (Noto CJK) | https://github.com/notofonts/noto-cjk | OFL-1.1 (`assets/fonts/OFL-NotoSansCJK.txt`) |
 | `assets/icon-128.png`, `assets/icon.ico` | WaveFlow | `src-tauri/crates/app/icons/` | GPL-3.0-only (project) |
+
+The screenshots show *Feel Special* by TWICE, used for illustration only.
+
+## License
+
+```
+Copyright (C) 2026 InstaZDLL
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+```
+
+See [LICENSE](LICENSE) for the full text.
