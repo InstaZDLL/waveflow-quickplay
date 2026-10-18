@@ -9,6 +9,7 @@ use egui::{
 
 use super::icons::{self, Icon};
 use super::theme;
+use crate::i18n::Strings;
 
 /// A flat icon button. `active` tints it with the accent (a toggled state).
 pub fn icon_button(ui: &mut Ui, icon: Icon, size: f32, tooltip: &str, active: bool) -> Response {
@@ -209,17 +210,21 @@ pub enum TitleAction {
     Pin,
     Minimize,
     Close,
+    Settings,
 }
 
 /// A draggable title bar for an undecorated window: logo, title, an
-/// optional dim subtitle, then pin (when `pinned` is `Some`), minimize and
+/// optional dim subtitle, then settings (when `settings` is `Some`, lit
+/// while the page is open), pin (when `pinned` is `Some`), minimize and
 /// close. Fills the `ui` it is given; the caller sizes it.
 pub fn title_bar(
     ui: &mut Ui,
+    t: &Strings,
     title: &str,
     subtitle: Option<&str>,
     pinned: Option<bool>,
     minimize: bool,
+    settings: Option<bool>,
 ) -> Option<TitleAction> {
     let rect = ui.max_rect();
     // The drag region goes first so the buttons drawn after it win hover.
@@ -249,15 +254,20 @@ pub fn title_bar(
         );
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             ui.spacing_mut().item_spacing = vec2(2.0, 0.0);
-            if icon_button(ui, Icon::Close, 22.0, "Close", false).clicked() {
+            if icon_button(ui, Icon::Close, 22.0, t.tip_close, false).clicked() {
                 action = Some(TitleAction::Close);
             }
-            if minimize && icon_button(ui, Icon::Minimize, 22.0, "Minimize", false).clicked() {
+            if minimize && icon_button(ui, Icon::Minimize, 22.0, t.tip_minimize, false).clicked() {
                 action = Some(TitleAction::Minimize);
             }
             if let Some(pinned) = pinned {
-                if icon_button(ui, Icon::Pin, 22.0, "Always on top (T)", pinned).clicked() {
+                if icon_button(ui, Icon::Pin, 22.0, t.tip_always_on_top, pinned).clicked() {
                     action = Some(TitleAction::Pin);
+                }
+            }
+            if let Some(open) = settings {
+                if icon_button(ui, Icon::Settings, 22.0, t.tip_settings, open).clicked() {
+                    action = Some(TitleAction::Settings);
                 }
             }
             ui.add_space(6.0);
@@ -354,7 +364,7 @@ pub fn resize_edges(ui: &mut Ui, allow_vertical: bool) {
 
 /// The bar visualizer: `bands` in 0..1, drawn as LED-style stacks in the
 /// accent colour, dim where unlit. Click toggles it.
-pub fn spectrum_bars(ui: &mut Ui, rect: Rect, bands: &[f32]) -> Response {
+pub fn spectrum_bars(ui: &mut Ui, rect: Rect, bands: &[f32], tooltip: &str) -> Response {
     let response = ui.interact(rect, ui.id().with("spectrum"), Sense::click());
     if !ui.is_rect_visible(rect) || bands.is_empty() {
         return response;
@@ -386,7 +396,7 @@ pub fn spectrum_bars(ui: &mut Ui, rect: Rect, bands: &[f32]) -> Response {
     if response.hovered() {
         ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
     }
-    response.on_hover_text("Spectrum (S)")
+    response.on_hover_text(tooltip)
 }
 
 fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {

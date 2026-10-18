@@ -94,6 +94,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+sys-locale = "0.3"
 
 [target.'cfg(windows)'.dependencies]
 # Owner relationship between the playlist window and the player (one taskbar

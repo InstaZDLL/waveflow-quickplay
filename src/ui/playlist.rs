@@ -7,12 +7,19 @@ use egui::{vec2, Align, Key, Label, Layout, Modifiers, RichText, Sense, Ui};
 use super::icons::{self, Icon};
 use super::widgets::{bar_button, title_bar, TitleAction};
 use super::{format_time, theme, Action, TITLE_HEIGHT};
+use crate::i18n::{fill, Strings};
 use crate::queue::Queue;
 
 const ROW_HEIGHT: f32 = 30.0;
 const TOOL_BUTTON: egui::Vec2 = egui::Vec2::new(30.0, 24.0);
 
-pub fn show(ui: &mut Ui, queue: &Queue, selected: Option<usize>, actions: &mut Vec<Action>) {
+pub fn show(
+    ui: &mut Ui,
+    t: &'static Strings,
+    queue: &Queue,
+    selected: Option<usize>,
+    actions: &mut Vec<Action>,
+) {
     if ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Delete)) {
         actions.push(Action::RemoveSelected);
     }
@@ -23,12 +30,14 @@ pub fn show(ui: &mut Ui, queue: &Queue, selected: Option<usize>, actions: &mut V
         .frame(theme::title_frame())
         .show(ui, |ui| {
             let n = queue.len();
+            let total = format_time(queue.total_duration_ms());
             let summary = match n {
-                0 => "Empty".to_string(),
-                1 => format!("1 track · {}", format_time(queue.total_duration_ms())),
-                n => format!("{n} tracks · {}", format_time(queue.total_duration_ms())),
+                0 => t.playlist_empty.to_string(),
+                1 => fill(t.playlist_one_track, &[("t", &total)]),
+                n => fill(t.playlist_n_tracks, &[("n", &n.to_string()), ("t", &total)]),
             };
-            if let Some(TitleAction::Close) = title_bar(ui, "Playlist", Some(&summary), None, false)
+            if let Some(TitleAction::Close) =
+                title_bar(ui, t, t.playlist, Some(&summary), None, false, None)
             {
                 actions.push(Action::ClosePlaylist);
             }
@@ -45,14 +54,14 @@ pub fn show(ui: &mut Ui, queue: &Queue, selected: Option<usize>, actions: &mut V
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing = vec2(3.0, 0.0);
-                if bar_button(ui, Icon::Add, TOOL_BUTTON, "Add files", true, false).clicked() {
+                if bar_button(ui, Icon::Add, TOOL_BUTTON, t.tip_add_files, true, false).clicked() {
                     actions.push(Action::OpenFiles);
                 }
                 if bar_button(
                     ui,
                     Icon::Remove,
                     TOOL_BUTTON,
-                    "Remove selected (Delete)",
+                    t.tip_remove_selected,
                     selected.is_some(),
                     false,
                 )
@@ -64,7 +73,7 @@ pub fn show(ui: &mut Ui, queue: &Queue, selected: Option<usize>, actions: &mut V
                     ui,
                     Icon::Trash,
                     TOOL_BUTTON,
-                    "Clear playlist",
+                    t.tip_clear_playlist,
                     !queue.is_empty(),
                     false,
                 )
@@ -95,7 +104,7 @@ pub fn show(ui: &mut Ui, queue: &Queue, selected: Option<usize>, actions: &mut V
                 ui.painter().text(
                     egui::pos2(rect.center().x, icon.bottom() + 8.0),
                     egui::Align2::CENTER_TOP,
-                    "Drop files here or press +",
+                    t.playlist_drop_hint,
                     egui::FontId::proportional(12.0),
                     theme::TEXT_FAINT,
                 );
@@ -114,6 +123,7 @@ pub fn show(ui: &mut Ui, queue: &Queue, selected: Option<usize>, actions: &mut V
                         };
                         row(
                             ui,
+                            t,
                             index,
                             entry,
                             current == Some(index),
@@ -128,6 +138,7 @@ pub fn show(ui: &mut Ui, queue: &Queue, selected: Option<usize>, actions: &mut V
 
 fn row(
     ui: &mut Ui,
+    t: &Strings,
     index: usize,
     entry: &crate::queue::TrackEntry,
     is_current: bool,
@@ -242,11 +253,11 @@ fn row(
         actions.push(Action::Select(Some(index)));
     }
     response.context_menu(|ui| {
-        if ui.button("Play").clicked() {
+        if ui.button(t.menu_play).clicked() {
             actions.push(Action::PlayIndex(index));
             ui.close();
         }
-        if ui.button("Remove").clicked() {
+        if ui.button(t.menu_remove).clicked() {
             actions.push(Action::Remove(index));
             ui.close();
         }

@@ -16,6 +16,7 @@ mod app;
 mod audio;
 mod capture;
 mod config;
+mod i18n;
 mod integration;
 mod ipc;
 mod library;
@@ -67,38 +68,40 @@ fn main() -> eframe::Result {
         println!("waveflow-quickplay {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
+    // The interface language also names the file-manager verbs.
+    let lang = || i18n::Lang::resolve(&Settings::load().language);
     if args.iter().any(|a| a == "--help" || a == "-h") {
+        let t = lang().strings();
         println!("usage: waveflow-quickplay [--enqueue] [FILE|FOLDER]...");
         println!();
         println!("A second launch hands its files to the running player and exits.");
         println!("  --enqueue      append to its queue instead of replacing it");
         println!(
             "  --register     add \"{}\" / \"{}\" to the file manager (current user)",
-            integration::PLAY_LABEL,
-            integration::ENQUEUE_LABEL
+            t.action_play_with, t.action_add_to_playlist
         );
         println!("  --unregister   remove them");
         return Ok(());
     }
-    for (flag, run) in [
-        (
-            "--register",
-            integration::register as fn() -> std::io::Result<String>,
-        ),
-        ("--unregister", integration::unregister),
-    ] {
-        if args.iter().any(|a| a == flag) {
-            return match run() {
-                Ok(done) => {
-                    println!("{done}");
-                    Ok(())
-                }
-                Err(e) => {
-                    eprintln!("{flag} failed: {e}");
-                    std::process::exit(1);
-                }
-            };
-        }
+    let integration_flag = args
+        .iter()
+        .find(|a| *a == "--register" || *a == "--unregister");
+    if let Some(flag) = integration_flag {
+        let run = if flag == "--register" {
+            integration::register(lang())
+        } else {
+            integration::unregister()
+        };
+        return match run {
+            Ok(done) => {
+                println!("{done}");
+                Ok(())
+            }
+            Err(e) => {
+                eprintln!("{flag} failed: {e}");
+                std::process::exit(1);
+            }
+        };
     }
     let mode = if args.iter().any(|a| a == "--enqueue") {
         ipc::Mode::Enqueue

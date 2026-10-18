@@ -5,12 +5,14 @@
 pub mod icons;
 pub mod player;
 pub mod playlist;
+pub mod settings;
 pub mod theme;
 pub mod widgets;
 
 use egui::TextureHandle;
 
 use crate::audio::PlayerState;
+use crate::i18n::Strings;
 
 /// Height of the custom title bar in logical points.
 pub const TITLE_HEIGHT: f32 = 26.0;
@@ -45,6 +47,10 @@ pub enum Action {
     Remove(usize),
     RemoveSelected,
     Clear,
+    /// Show or hide the settings page in place of the controls.
+    ToggleSettings,
+    /// A language code from the picker; empty means "follow the system".
+    SetLanguage(String),
 }
 
 /// Read-only snapshot of what the player pane shows.
@@ -75,6 +81,8 @@ pub struct PlayerView<'a> {
     pub has_next: bool,
     pub cover: Option<&'a TextureHandle>,
     pub status: Option<&'a str>,
+    /// The interface language's strings.
+    pub t: &'static Strings,
 }
 
 /// `m:ss`, or `h:mm:ss` from an hour on.

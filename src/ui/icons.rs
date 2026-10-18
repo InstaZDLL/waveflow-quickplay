@@ -23,6 +23,8 @@ pub enum Icon {
     Stop,
     Minimize,
     Close,
+    /// A gear.
+    Settings,
     /// WaveFlow's three bars.
     Logo,
 }
@@ -191,6 +193,23 @@ pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
         Icon::Close => {
             painter.line_segment([p(-0.28, -0.28), p(0.28, 0.28)], stroke);
             painter.line_segment([p(0.28, -0.28), p(-0.28, 0.28)], stroke);
+        }
+        Icon::Settings => {
+            // Eight teeth around a ring, a hole in the middle.
+            let teeth = Stroke::new((s * 0.13).max(1.6), color);
+            for i in 0..8 {
+                let a = i as f32 * std::f32::consts::FRAC_PI_4;
+                let (sin, cos) = a.sin_cos();
+                painter.line_segment(
+                    [
+                        pos2(c.x + u(0.24) * cos, c.y + u(0.24) * sin),
+                        pos2(c.x + u(0.40) * cos, c.y + u(0.40) * sin),
+                    ],
+                    teeth,
+                );
+            }
+            painter.circle_stroke(c, u(0.24), Stroke::new((s * 0.10).max(1.4), color));
+            painter.circle_stroke(c, u(0.10), stroke);
         }
         Icon::Logo => {
             for (x, h) in [(-0.30_f32, 0.30_f32), (0.0, 0.46), (0.30, 0.22)] {

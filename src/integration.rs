@@ -16,8 +16,7 @@
 use std::io;
 use std::path::PathBuf;
 
-pub const PLAY_LABEL: &str = "Play with WaveFlow QuickPlay";
-pub const ENQUEUE_LABEL: &str = "Add to WaveFlow QuickPlay playlist";
+use crate::i18n::{Lang, Strings};
 
 fn exe_path() -> io::Result<PathBuf> {
     let exe = std::env::current_exe()?;
@@ -27,8 +26,12 @@ fn exe_path() -> io::Result<PathBuf> {
     Ok(PathBuf::from(s.strip_prefix(r"\\?\").unwrap_or(&s)))
 }
 
-pub fn register() -> io::Result<String> {
-    platform::register(&exe_path()?)
+/// `lang` is the language of the menu labels: on Windows the registry holds
+/// one label per verb, so the labels are written in the interface language
+/// in force at registration; the Linux desktop entry carries every language
+/// and the desktop picks.
+pub fn register(lang: Lang) -> io::Result<String> {
+    platform::register(&exe_path()?, lang.strings())
 }
 
 pub fn unregister() -> io::Result<String> {
@@ -50,39 +53,44 @@ mod platform {
         format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
     }
 
-    fn verb_keys() -> Vec<(String, &'static str, &'static str, bool)> {
+    fn verb_keys(t: &Strings) -> Vec<(String, &'static str, &'static str, bool)> {
         // (key under HKCU\Software\Classes, label, extra arg, is_folder)
         let mut out = Vec::new();
         for ext in AUDIO_EXTENSIONS {
             let base = format!(r"SystemFileAssociations\.{ext}\shell");
-            out.push((format!(r"{base}\{PLAY_VERB}"), PLAY_LABEL, "", false));
+            out.push((
+                format!(r"{base}\{PLAY_VERB}"),
+                t.action_play_with,
+                "",
+                false,
+            ));
             out.push((
                 format!(r"{base}\{ENQUEUE_VERB}"),
-                ENQUEUE_LABEL,
+                t.action_add_to_playlist,
                 "--enqueue",
                 false,
             ));
         }
         out.push((
             format!(r"Directory\shell\{PLAY_VERB}"),
-            PLAY_LABEL,
+            t.action_play_with,
             "",
             true,
         ));
         out.push((
             format!(r"Directory\shell\{ENQUEUE_VERB}"),
-            ENQUEUE_LABEL,
+            t.action_add_to_playlist,
             "--enqueue",
             true,
         ));
         out
     }
 
-    fn registration_script(exe: &std::path::Path) -> String {
+    fn registration_script(exe: &std::path::Path, t: &Strings) -> String {
         let exe = exe.to_string_lossy();
         let icon = format!("\"{exe}\",0");
         let mut s = String::from("Windows Registry Editor Version 5.00\r\n\r\n");
-        for (key, label, arg, is_folder) in verb_keys() {
+        for (key, label, arg, is_folder) in verb_keys(t) {
             let full = format!(r"HKEY_CURRENT_USER\Software\Classes\{key}");
             s.push_str(&format!(
                 "[{full}]\r\n@={}\r\n\"Icon\"={}\r\n",
@@ -119,7 +127,8 @@ mod platform {
 
     fn removal_script() -> String {
         let mut s = String::from("Windows Registry Editor Version 5.00\r\n\r\n");
-        for (key, ..) in verb_keys() {
+        // Keys are language-independent; any table gives the same list.
+        for (key, ..) in verb_keys(Lang::En.strings()) {
             s.push_str(&format!(
                 "[-HKEY_CURRENT_USER\\Software\\Classes\\{key}]\r\n\r\n"
             ));
@@ -159,11 +168,13 @@ mod platform {
         };
     }
 
-    pub fn register(exe: &std::path::Path) -> io::Result<String> {
-        import(&registration_script(exe))?;
+    pub fn register(exe: &std::path::Path, t: &Strings) -> io::Result<String> {
+        import(&registration_script(exe, t))?;
         notify_shell();
         Ok(format!(
-            "registered for the current user: \"{PLAY_LABEL}\" and \"{ENQUEUE_LABEL}\" on {} audio extensions and on folders, plus an \"Open with\" entry ({}).",
+            "registered for the current user: \"{}\" and \"{}\" on {} audio extensions and on folders, plus an \"Open with\" entry ({}).",
+            t.action_play_with,
+            t.action_add_to_playlist,
             AUDIO_EXTENSIONS.len(),
             exe.display()
         ))
@@ -184,9 +195,11 @@ mod platform {
 
         #[test]
         fn script_escapes_paths() {
-            let s = registration_script(std::path::Path::new(
-                r"C:\Program Files\QP\waveflow-quickplay.exe",
-            ));
+            let s = registration_script(
+                std::path::Path::new(r"C:\Program Files\QP\waveflow-quickplay.exe"),
+                Lang::Fr.strings(),
+            );
+            assert!(s.contains("@=\"Lire avec WaveFlow QuickPlay\""));
             assert!(s.starts_with("Windows Registry Editor Version 5.00\r\n"));
             assert!(s.contains(r#"@="\"C:\\Program Files\\QP\\waveflow-quickplay.exe\" \"%1\"""#));
             assert!(s.contains(
@@ -249,11 +262,28 @@ mod platform {
         }
     }
 
-    pub fn register(exe: &std::path::Path) -> io::Result<String> {
+    /// `Key=value` in English, then `Key[lang]=value` for every other
+    /// language, as the desktop entry spec localises keys; the desktop
+    /// shows the one matching the session's locale.
+    fn localised(key: &str, pick: impl Fn(&Strings) -> &'static str) -> String {
+        let mut out = format!("{key}={}\n", pick(Lang::En.strings()));
+        for lang in Lang::ALL {
+            if lang != Lang::En {
+                // `zh-CN` is `zh_CN` in desktop entries.
+                let tag = lang.code().replace('-', "_");
+                out.push_str(&format!("{key}[{tag}]={}\n", pick(lang.strings())));
+            }
+        }
+        out
+    }
+
+    pub fn register(exe: &std::path::Path, _t: &Strings) -> io::Result<String> {
         let exe_s = exe.to_string_lossy();
         let quoted = exec_quote(&exe_s);
+        let comment = localised("Comment", |t| t.desktop_comment);
+        let enqueue = localised("Name", |t| t.action_add_to_playlist);
         let entry = format!(
-            "[Desktop Entry]\nType=Application\nName=WaveFlow QuickPlay\nComment=Play audio files quickly\nExec={quoted} %F\nTryExec={exe_s}\nIcon={DESKTOP_ID}\nTerminal=false\nCategories=AudioVideo;Audio;Player;\nMimeType={MIME_TYPES}\nStartupWMClass={DESKTOP_ID}\nActions=Enqueue;\n\n[Desktop Action Enqueue]\nName={ENQUEUE_LABEL}\nExec={quoted} --enqueue %F\n"
+            "[Desktop Entry]\nType=Application\nName=WaveFlow QuickPlay\n{comment}Exec={quoted} %F\nTryExec={exe_s}\nIcon={DESKTOP_ID}\nTerminal=false\nCategories=AudioVideo;Audio;Player;\nMimeType={MIME_TYPES}\nStartupWMClass={DESKTOP_ID}\nActions=Enqueue;\n\n[Desktop Action Enqueue]\n{enqueue}Exec={quoted} --enqueue %F\n"
         );
         let desktop = desktop_file()?;
         let icon = icon_file()?;
@@ -288,7 +318,7 @@ mod platform {
 mod platform {
     use super::*;
 
-    pub fn register(_exe: &std::path::Path) -> io::Result<String> {
+    pub fn register(_exe: &std::path::Path, _t: &Strings) -> io::Result<String> {
         Err(io::Error::other(
             "file associations on this platform need an application bundle; not available from a bare binary.",
         ))

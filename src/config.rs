@@ -22,6 +22,9 @@ pub struct Settings {
     pub show_playlist: bool,
     pub show_spectrum: bool,
     pub playlist_size: [f32; 2],
+    /// Interface language as a BCP 47 code (`fr`, `zh-CN`); empty to follow
+    /// the system. See [`crate::i18n::Lang`].
+    pub language: String,
 }
 
 impl Default for Settings {
@@ -35,6 +38,7 @@ impl Default for Settings {
             show_playlist: false,
             show_spectrum: true,
             playlist_size: [340.0, 420.0],
+            language: String::new(),
         }
     }
 }

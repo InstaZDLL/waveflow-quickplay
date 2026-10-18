@@ -7,6 +7,7 @@ use super::icons::{self, Icon};
 use super::widgets::{bar_button, icon_button, marquee, slider, spectrum_bars};
 use super::{format_time, theme, Action, PlayerView};
 use crate::audio::PlayerState;
+use crate::i18n::{fill, Strings};
 
 const BAR_BUTTON: egui::Vec2 = egui::Vec2::new(34.0, 26.0);
 
@@ -54,7 +55,7 @@ pub fn controls(ui: &mut Ui, view: &PlayerView<'_>, actions: &mut Vec<Action>) {
                 pos2(right - spectrum_w, clock.top() + 2.0),
                 pos2(right, clock.bottom() - 2.0),
             );
-            if spectrum_bars(ui, area, bands).clicked() {
+            if spectrum_bars(ui, area, bands, view.t.tip_spectrum).clicked() {
                 actions.push(Action::ToggleSpectrum);
             }
         }
@@ -68,7 +69,7 @@ pub fn controls(ui: &mut Ui, view: &PlayerView<'_>, actions: &mut Vec<Action>) {
                     .font(theme::bold(14.0))
                     .color(theme::TEXT)
             } else {
-                RichText::new("Nothing playing")
+                RichText::new(view.t.nothing_playing)
                     .font(theme::bold(14.0))
                     .color(theme::TEXT_DIM)
             };
@@ -83,10 +84,10 @@ pub fn controls(ui: &mut Ui, view: &PlayerView<'_>, actions: &mut Vec<Action>) {
                     (Some(a), Some(b)) => format!("{a} · {b}"),
                     (Some(a), None) => a.to_string(),
                     (None, Some(b)) => b.to_string(),
-                    (None, None) => "Unknown artist".to_string(),
+                    (None, None) => view.t.unknown_artist.to_string(),
                 }
             } else {
-                "Drop audio files here, or press Ctrl+O".to_string()
+                view.t.drop_hint.to_string()
             };
             ui.add(
                 Label::new(RichText::new(subtitle).size(12.0).color(theme::TEXT_DIM)).truncate(),
@@ -144,7 +145,8 @@ pub fn controls(ui: &mut Ui, view: &PlayerView<'_>, actions: &mut Vec<Action>) {
             } else {
                 Icon::VolumeHigh
             };
-            let pct = format!("Volume {}%", (view.volume * 100.0).round() as u32);
+            let percent = ((view.volume * 100.0).round() as u32).to_string();
+            let pct = fill(view.t.volume_percent, &[("n", &percent)]);
             if icon_button(ui, icon, 22.0, &pct, false).clicked() {
                 let next = if view.volume <= 0.001 { 0.8 } else { 0.0 };
                 actions.push(Action::SetVolume(next));
@@ -160,9 +162,9 @@ pub fn controls(ui: &mut Ui, view: &PlayerView<'_>, actions: &mut Vec<Action>) {
         ui.spacing_mut().item_spacing = vec2(3.0, 0.0);
         let playing = view.state == PlayerState::Playing;
         let (icon, tip) = if playing {
-            (Icon::Pause, "Pause (Space)")
+            (Icon::Pause, view.t.tip_pause)
         } else {
-            (Icon::Play, "Play (Space)")
+            (Icon::Play, view.t.tip_play)
         };
         let can_play = view.has_track || view.has_next;
         if bar_button(ui, icon, BAR_BUTTON, tip, can_play, playing).clicked() {
@@ -172,14 +174,23 @@ pub fn controls(ui: &mut Ui, view: &PlayerView<'_>, actions: &mut Vec<Action>) {
             view.state,
             PlayerState::Playing | PlayerState::Paused | PlayerState::Loading
         );
-        if bar_button(ui, Icon::Stop, BAR_BUTTON, "Stop", stoppable, false).clicked() {
+        if bar_button(
+            ui,
+            Icon::Stop,
+            BAR_BUTTON,
+            view.t.tip_stop,
+            stoppable,
+            false,
+        )
+        .clicked()
+        {
             actions.push(Action::Stop);
         }
         if bar_button(
             ui,
             Icon::Prev,
             BAR_BUTTON,
-            "Previous (P)",
+            view.t.tip_previous,
             view.has_prev || view.has_track,
             false,
         )
@@ -187,7 +198,16 @@ pub fn controls(ui: &mut Ui, view: &PlayerView<'_>, actions: &mut Vec<Action>) {
         {
             actions.push(Action::Prev);
         }
-        if bar_button(ui, Icon::Next, BAR_BUTTON, "Next (N)", view.has_next, false).clicked() {
+        if bar_button(
+            ui,
+            Icon::Next,
+            BAR_BUTTON,
+            view.t.tip_next,
+            view.has_next,
+            false,
+        )
+        .clicked()
+        {
             actions.push(Action::Next);
         }
         ui.add_space(3.0);
@@ -195,7 +215,7 @@ pub fn controls(ui: &mut Ui, view: &PlayerView<'_>, actions: &mut Vec<Action>) {
             ui,
             Icon::Add,
             BAR_BUTTON,
-            "Open files (Ctrl+O)",
+            view.t.tip_open_files,
             true,
             false,
         )
@@ -210,7 +230,7 @@ pub fn controls(ui: &mut Ui, view: &PlayerView<'_>, actions: &mut Vec<Action>) {
                 ui,
                 Icon::Playlist,
                 BAR_BUTTON,
-                "Playlist (L)",
+                view.t.tip_playlist,
                 true,
                 view.playlist_open,
             )
@@ -222,7 +242,7 @@ pub fn controls(ui: &mut Ui, view: &PlayerView<'_>, actions: &mut Vec<Action>) {
                 ui,
                 Icon::Artwork,
                 BAR_BUTTON,
-                "Artwork (A)",
+                view.t.tip_artwork,
                 true,
                 view.expanded,
             )
@@ -281,9 +301,9 @@ pub fn artwork(ui: &mut Ui, view: &PlayerView<'_>) {
                 Rect::from_center_size(rect.center() - vec2(0.0, 8.0), vec2(side, side));
             icons::paint(ui.painter(), icon_rect, Icon::Note, theme::ELEVATED);
             let label = if view.has_track {
-                "No artwork"
+                view.t.no_artwork
             } else {
-                "Nothing playing"
+                view.t.nothing_playing
             };
             ui.painter().text(
                 pos2(rect.center().x, icon_rect.bottom() + 10.0),
@@ -298,7 +318,7 @@ pub fn artwork(ui: &mut Ui, view: &PlayerView<'_>) {
 
 /// Accent frame + label painted over the whole window while files are
 /// dragged over it.
-pub fn drop_overlay(ui: &mut Ui) {
+pub fn drop_overlay(ui: &mut Ui, t: &Strings) {
     let rect = ui.ctx().content_rect();
     let painter = ui.painter();
     painter.rect_filled(
@@ -316,7 +336,7 @@ pub fn drop_overlay(ui: &mut Ui) {
     painter.text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
-        "Drop to add to the playlist",
+        t.drop_to_add,
         theme::bold(14.0),
         theme::ACCENT_HOVER,
     );

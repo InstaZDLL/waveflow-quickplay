@@ -13,13 +13,15 @@ use egui::{
 use crate::audio::{AudioCmd, AudioEngine, EngineEvent, PlayerState};
 use crate::capture::Capture;
 use crate::config::{Settings, MIN_WIDTH};
+use crate::i18n::{fill, Lang, Strings};
 use crate::ipc;
 use crate::library::{self, Loader, LoaderEvent};
 use crate::lyrics::Lyrics;
 use crate::queue::Queue;
 use crate::ui::widgets::{self, TitleAction};
 use crate::ui::{
-    player, playlist, theme, Action, PlayerView, COMPACT_HEIGHT, CONTROLS_HEIGHT, TITLE_HEIGHT,
+    player, playlist, settings as settings_page, theme, Action, PlayerView, COMPACT_HEIGHT,
+    CONTROLS_HEIGHT, TITLE_HEIGHT,
 };
 
 pub const APP_ID: &str = "app.waveflow.quickplay";
@@ -85,6 +87,10 @@ pub struct QuickPlayApp {
     /// The main window has reported a position at least once; before that
     /// a missing `outer_rect` says nothing about minimization (macOS path).
     root_placed: bool,
+    /// Interface language, resolved from the settings (or the system).
+    lang: Lang,
+    /// The settings page is shown in place of the controls.
+    settings_open: bool,
     /// The playlist window is owned by the player (one taskbar button).
     playlist_attached: bool,
     /// Where the playlist sits relative to the player's top-right corner;
@@ -133,6 +139,7 @@ impl QuickPlayApp {
         }
         let notify_ctx = ctx.clone();
         let notify: Arc<dyn Fn() + Send + Sync> = Arc::new(move || notify_ctx.request_repaint());
+        let lang = Lang::resolve(&settings.language);
         let mut app = Self {
             queue: Queue::default(),
             engine: None,
@@ -154,6 +161,8 @@ impl QuickPlayApp {
             window_mode_applied: false,
             root_minimized: false,
             root_placed: false,
+            lang,
+            settings_open: false,
             playlist_attached: false,
             playlist_offset: None,
             dock_anchor: None,
@@ -197,7 +206,11 @@ impl QuickPlayApp {
                 }
                 Err(err) => {
                     tracing::error!(%err, "audio engine unavailable");
-                    self.set_status(format!("Audio unavailable: {err}"));
+                    let message = fill(
+                        self.t().status_audio_unavailable,
+                        &[("e", &err.to_string())],
+                    );
+                    self.set_status(message);
                 }
             }
         }
@@ -208,6 +221,11 @@ impl QuickPlayApp {
         if let Some(engine) = self.ensure_engine() {
             engine.send(cmd);
         }
+    }
+
+    /// The strings of the interface language in force.
+    fn t(&self) -> &'static Strings {
+        self.lang.strings()
     }
 
     fn set_status(&mut self, message: impl Into<String>) {
@@ -222,7 +240,7 @@ impl QuickPlayApp {
         if inputs.iter().any(|p| p.is_dir()) {
             // Folders are walked on the loader's thread; the result comes
             // back as `LoaderEvent::Scanned`.
-            self.set_status("Scanning folders…");
+            self.set_status(self.t().status_scanning);
             self.loader.request_scan(inputs.to_vec(), autoplay);
             return;
         }
@@ -234,7 +252,7 @@ impl QuickPlayApp {
     fn add_resolved(&mut self, paths: Vec<PathBuf>, had_inputs: bool, autoplay: bool) {
         if paths.is_empty() {
             if had_inputs {
-                self.set_status("No supported audio files");
+                self.set_status(self.t().status_no_audio_files);
             }
             return;
         }
@@ -386,9 +404,10 @@ impl QuickPlayApp {
     }
 
     fn open_dialog(&mut self) {
+        let t = self.t();
         let dialog = rfd::FileDialog::new()
-            .set_title("Open audio files")
-            .add_filter("Audio", library::audio_extensions());
+            .set_title(t.dialog_open_title)
+            .add_filter(t.dialog_filter_audio, library::audio_extensions());
         if let Some(paths) = dialog.pick_files() {
             self.add_paths(&paths, true);
         }
@@ -454,7 +473,8 @@ impl QuickPlayApp {
                         }
                     }
                     self.state = PlayerState::Idle;
-                    self.set_status(format!("Cannot play: {message}"));
+                    let status = fill(self.t().status_cannot_play, &[("e", &message)]);
+                    self.set_status(status);
                     // Skip to the next playable row, bounded so a queue of
                     // broken files cannot loop forever.
                     self.fail_streak += 1;
@@ -731,6 +751,13 @@ impl QuickPlayApp {
                 self.set_playlist_minimized(true);
             }
             Action::CloseWindow => ctx.send_viewport_cmd(ViewportCommand::Close),
+            Action::ToggleSettings => self.settings_open = !self.settings_open,
+            Action::SetLanguage(code) => {
+                self.settings.language =
+                    Lang::from_code(&code).map_or_else(String::new, |l| l.code().to_string());
+                self.lang = Lang::resolve(&self.settings.language);
+                self.settings.save();
+            }
         }
     }
 
@@ -801,6 +828,7 @@ impl QuickPlayApp {
                 .as_ref()
                 .filter(|_| self.cover_for == current.map(|e| e.id)),
             status,
+            t: self.t(),
         }
     }
 
@@ -877,6 +905,7 @@ impl QuickPlayApp {
             builder = builder.with_position(pos);
         }
         let snapshot = self.shortcut_snapshot();
+        let t = self.t();
         let queue = &self.queue;
         let selected = self.selected;
         let mut size: Option<Vec2> = None;
@@ -901,7 +930,7 @@ impl QuickPlayApp {
             }
             // Keys typed into this window land in its own input stream.
             collect_shortcuts(ui.ctx(), snapshot, actions);
-            playlist::show(ui, queue, selected, actions);
+            playlist::show(ui, t, queue, selected, actions);
             close
         });
         if let Some(size) = size.filter(|s| s.x >= 240.0 && s.y >= 160.0) {
@@ -1093,6 +1122,8 @@ impl eframe::App for QuickPlayApp {
         // Custom chrome: the title bar carries the window title, the pin and
         // the window buttons; the edges resize.
         let subtitle = view.has_track.then(|| view.title.to_string());
+        let t = view.t;
+        let settings_open = self.settings_open;
         egui::Panel::top("title")
             .exact_size(TITLE_HEIGHT)
             .show_separator_line(false)
@@ -1100,18 +1131,34 @@ impl eframe::App for QuickPlayApp {
             .show(ui, |ui| {
                 match widgets::title_bar(
                     ui,
-                    "WaveFlow QuickPlay",
+                    t,
+                    MAIN_TITLE,
                     subtitle.as_deref(),
                     Some(view.always_on_top),
                     true,
+                    Some(settings_open),
                 ) {
                     Some(TitleAction::Pin) => actions.push(Action::TogglePin),
                     Some(TitleAction::Minimize) => actions.push(Action::Minimize),
                     Some(TitleAction::Close) => actions.push(Action::CloseWindow),
+                    Some(TitleAction::Settings) => actions.push(Action::ToggleSettings),
                     None => {}
                 }
             });
-        if view.expanded {
+        if settings_open {
+            // The page takes the whole content area in both modes; Esc or
+            // its own close button brings the controls back.
+            if ui
+                .ctx()
+                .input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+            {
+                actions.push(Action::ToggleSettings);
+            }
+            let language = self.settings.language.clone();
+            egui::CentralPanel::default()
+                .frame(theme::panel_frame())
+                .show(ui, |ui| settings_page::show(ui, t, &language, &mut actions));
+        } else if view.expanded {
             egui::Panel::bottom("controls")
                 .exact_size(CONTROLS_HEIGHT)
                 .show_separator_line(false)
@@ -1127,7 +1174,7 @@ impl eframe::App for QuickPlayApp {
         }
         widgets::resize_edges(ui, view.expanded);
         if hovering_files {
-            player::drop_overlay(ui);
+            player::drop_overlay(ui, t);
         }
         drop(view);
 
