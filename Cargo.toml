@@ -81,6 +81,9 @@ rfd = { version = "0.17", default-features = false, features = [
     "common-controls-v6",
 ] }
 dirs = "7"
+# Single instance: a second launch hands its files to the running player
+# over a local socket (named pipe on Windows, Unix socket elsewhere).
+interprocess = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
@@ -93,6 +96,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_System_Threading",
     "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Shell",
 ] }
 
 [build-dependencies]

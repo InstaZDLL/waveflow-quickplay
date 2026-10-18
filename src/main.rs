@@ -16,6 +16,8 @@ mod app;
 mod audio;
 mod capture;
 mod config;
+mod integration;
+mod ipc;
 mod library;
 mod lyrics;
 mod platform;
@@ -58,14 +60,85 @@ fn main() -> eframe::Result {
         return Ok(());
     }
     if args.iter().any(|a| a == "--help" || a == "-h") {
-        println!("usage: waveflow-quickplay [FILE|FOLDER]...");
+        println!(
+            "usage: waveflow-quickplay [--enqueue] [FILE|FOLDER]...
+\n             
+\n             A second launch hands its files to the running player and exits.
+\n             --enqueue      append to its queue instead of replacing it
+\n             --register     add \"{}\" / \"{}\" to the file manager (current user)
+\n             --unregister   remove them",
+            integration::PLAY_LABEL,
+            integration::ENQUEUE_LABEL
+        );
         return Ok(());
     }
+    for (flag, run) in [
+        (
+            "--register",
+            integration::register as fn() -> std::io::Result<String>,
+        ),
+        ("--unregister", integration::unregister),
+    ] {
+        if args.iter().any(|a| a == flag) {
+            return match run() {
+                Ok(done) => {
+                    println!("{done}");
+                    Ok(())
+                }
+                Err(e) => {
+                    eprintln!("{flag} failed: {e}");
+                    std::process::exit(1);
+                }
+            };
+        }
+    }
+    let mode = if args.iter().any(|a| a == "--enqueue") {
+        ipc::Mode::Enqueue
+    } else {
+        ipc::Mode::Play
+    };
     let files: Vec<PathBuf> = args
         .iter()
         .filter(|a| !a.starts_with("--"))
         .map(PathBuf::from)
         .collect();
+
+    // Single instance: hand the files to a running player if there is one;
+    // otherwise become the one that listens. Losing the creation race means
+    // another launch is starting right now, so hand over to it instead.
+    match ipc::send(mode, &files) {
+        Ok(true) => {
+            tracing::info!(files = files.len(), "handed to the running instance");
+            return Ok(());
+        }
+        Ok(false) => {}
+        Err(e) => tracing::warn!(error = %e, "single-instance check failed"),
+    }
+    let server = match ipc::Server::start() {
+        Ok(s) => Some(s),
+        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+            let mut handed = false;
+            for _ in 0..20 {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                if ipc::send(mode, &files).unwrap_or(false) {
+                    handed = true;
+                    break;
+                }
+            }
+            if handed {
+                tracing::info!("handed to the instance that won the start race");
+                return Ok(());
+            }
+            tracing::warn!(
+                "another instance holds the socket but does not answer; running standalone"
+            );
+            None
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "single-instance socket unavailable; running standalone");
+            None
+        }
+    };
 
     let settings = Settings::load();
     let (inner, max): ([f32; 2], [f32; 2]) = if settings.expanded {
@@ -107,7 +180,7 @@ fn main() -> eframe::Result {
         "WaveFlow QuickPlay",
         options,
         Box::new(move |cc| {
-            let app = QuickPlayApp::new(cc, settings, files);
+            let app = QuickPlayApp::new(cc, settings, files, server);
             tracing::info!(elapsed_ms = started.elapsed().as_millis(), "window ready");
             Ok(Box::new(app))
         }),

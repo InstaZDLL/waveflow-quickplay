@@ -13,6 +13,7 @@ use egui::{
 use crate::audio::{AudioCmd, AudioEngine, EngineEvent, PlayerState};
 use crate::capture::Capture;
 use crate::config::{Settings, MIN_WIDTH};
+use crate::ipc;
 use crate::library::{self, Loader, LoaderEvent};
 use crate::lyrics::Lyrics;
 use crate::queue::Queue;
@@ -95,6 +96,12 @@ pub struct QuickPlayApp {
     lyrics: Option<Lyrics>,
     /// Test-only window capture, armed by `QUICKPLAY_CAPTURE_DIR`.
     capture: Option<Capture>,
+    /// Single-instance socket; `None` when another instance holds it.
+    ipc: Option<ipc::Server>,
+    /// When the last remote `play` arrived: a burst of them (Explorer
+    /// launches one process per selected file) must not clear the queue
+    /// for each file after the first.
+    last_remote_play: Option<Instant>,
     /// Smoothed bar heights shown by the visualizer.
     spectrum: Vec<f32>,
     /// The last frame taken, which the bars ease toward.
@@ -103,9 +110,17 @@ pub struct QuickPlayApp {
 }
 
 impl QuickPlayApp {
-    pub fn new(cc: &eframe::CreationContext<'_>, settings: Settings, files: Vec<PathBuf>) -> Self {
+    pub fn new(
+        cc: &eframe::CreationContext<'_>,
+        settings: Settings,
+        files: Vec<PathBuf>,
+        ipc: Option<ipc::Server>,
+    ) -> Self {
         theme::apply(&cc.egui_ctx);
         let ctx = cc.egui_ctx.clone();
+        if let Some(server) = &ipc {
+            server.attach(&ctx);
+        }
         let notify_ctx = ctx.clone();
         let notify: Arc<dyn Fn() + Send + Sync> = Arc::new(move || notify_ctx.request_repaint());
         let mut app = Self {
@@ -135,6 +150,8 @@ impl QuickPlayApp {
             playlist_expected_pos: None,
             lyrics: None,
             capture: Capture::from_env(),
+            ipc,
+            last_remote_play: None,
             spectrum: vec![0.0; crate::audio::spectrum::BAND_COUNT],
             spectrum_target: vec![0.0; crate::audio::spectrum::BAND_COUNT],
             spectrum_tick: Instant::now(),
@@ -834,6 +851,38 @@ impl QuickPlayApp {
         }
     }
 
+    /// Files handed over by a second launch (file manager verbs). `play`
+    /// replaces the queue as PotPlayer's "Play with" does, except within a
+    /// burst, where the following files are appended; `enqueue` appends.
+    /// Either way the window comes to the front.
+    fn pump_ipc_messages(&mut self, ctx: &egui::Context) {
+        // Explorer starts the per-file processes some 30 ms apart; a user
+        // double-clicking two files is slower than this.
+        const BURST: Duration = Duration::from_millis(500);
+        let mut got_any = false;
+        while let Some(msg) = self.ipc.as_ref().and_then(|s| s.try_recv()) {
+            got_any = true;
+            match msg.mode {
+                ipc::Mode::Play => {
+                    let now = Instant::now();
+                    let in_burst = self
+                        .last_remote_play
+                        .is_some_and(|at| now.duration_since(at) < BURST);
+                    self.last_remote_play = Some(now);
+                    if !msg.paths.is_empty() && !in_burst {
+                        self.clear();
+                    }
+                    self.add_paths(&msg.paths, true);
+                }
+                ipc::Mode::Enqueue => self.add_paths(&msg.paths, false),
+            }
+        }
+        if got_any {
+            ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Minimized(false));
+            ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Focus);
+        }
+    }
+
     /// Wakes the UI exactly when the lyric line changes, instead of letting
     /// it lag by up to a position tick.
     fn schedule_lyric_repaint(&self, ctx: &egui::Context) {
@@ -920,6 +969,7 @@ impl eframe::App for QuickPlayApp {
         }
         self.pump_engine_events();
         self.pump_loader_events();
+        self.pump_ipc_messages(ctx);
         self.handle_dropped_files(ctx);
         self.handle_shortcuts(ctx);
         self.track_window_size(ctx);

@@ -52,6 +52,23 @@ app.
 Files and folders can be dropped on either window; double-click a playlist
 row to play it; right-click for Play / Remove.
 
+### File manager integration
+
+`waveflow-quickplay --register` (and `--unregister`) works per user, no
+administrator rights, no installer:
+
+- **Windows**: two context-menu entries on every audio extension and on
+  folders, "Play with WaveFlow QuickPlay" and "Add to WaveFlow QuickPlay
+  playlist", plus an "Open with" entry. Keys live under
+  `HKCUSoftwareClasses`; the default handler for the extensions is not
+  changed (Settings › Default apps does that). A multi-selection launches
+  one process per file; the single-instance socket merges them.
+- **Linux**: `~/.local/share/applications/app.waveflow.quickplay.desktop`
+  with the audio MIME types and an "Add to playlist" action, plus the icon.
+  QuickPlay then appears in "Open with"; `xdg-mime default
+  app.waveflow.quickplay.desktop audio/flac` makes it the default per type.
+- **macOS**: not available from a bare binary (needs an app bundle).
+
 ### Lyrics
 
 A `song.lrc` next to `song.flac` is read when the track starts and its
@@ -78,6 +95,8 @@ waveflow-quickplay
    ├── src/platform.rs    Windows: owner link between the playlist window and the player
    ├── src/queue.rs       the playlist model
    ├── src/config.rs      settings.json
+   ├── src/ipc.rs         single instance: local socket, play / enqueue hand-over
+   ├── src/integration.rs --register / --unregister (registry verbs, .desktop file)
    └── src/ui/            theme, painted icons, widgets, player pane, playlist window
 ```
 
