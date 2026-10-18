@@ -2,14 +2,15 @@
 //! and exits, so "Play with" / "Add to playlist" from the file manager land
 //! in the open window instead of opening another one (what PotPlayer does).
 //!
-//! Transport: one local socket per user. A socket file in the per-user,
-//! mode-0700 runtime directory (`$XDG_RUNTIME_DIR`) where there is one,
-//! so no other local user can reach or squat it; a named pipe on Windows,
-//! whose default DACL lets only the owner write; the abstract namespace
-//! only as a last resort. Messages are capped in size and count. What
-//! crosses the socket is a list of file paths to play, nothing secret. Protocol, UTF-8 lines: `play` or `enqueue`, one absolute path
-//! per line, an empty line; the server answers `ok` once it has queued the
-//! message, so the client can exit knowing the files were taken.
+//! Transport: one local socket per user. A socket file in a per-user,
+//! mode-0700 directory (`$XDG_RUNTIME_DIR`, or `$TMPDIR` on macOS) where
+//! there is one, so no other local user can reach or squat it; a named pipe
+//! on Windows, whose default DACL lets only the owner write; the Linux
+//! abstract namespace only as a last resort. Messages are capped in size
+//! and count. What crosses the socket is a list of file paths to play,
+//! nothing secret. Protocol, UTF-8 lines: `play` or `enqueue`, one absolute
+//! path per line, an empty line; the server answers `ok` once it has queued
+//! the message, so the client can exit knowing the files were taken.
 
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
@@ -52,10 +53,14 @@ fn socket_name() -> io::Result<(Name<'static>, Option<PathBuf>)> {
         .or_else(|_| std::env::var("USERNAME"))
         .unwrap_or_else(|_| "default".into());
     let base = format!("waveflow-quickplay-{user}.sock");
-    // Per-user private directory first (0700 by the XDG spec); the abstract
-    // namespace is host-wide and only used when there is none.
-    let private_dir = dirs::runtime_dir().filter(|d| d.is_dir());
-    if cfg!(windows) || (private_dir.is_none() && GenericNamespaced::is_supported()) {
+    // Per-user private directory first; the Linux abstract namespace is
+    // host-wide and only used when there is none. On the other Unices
+    // `GenericNamespaced` would mean a file in /tmp (interprocess's
+    // deprecated `SpecialDirUdSocket`), which is host-wide too, so they
+    // always get a path.
+    let private_dir = private_runtime_dir();
+    let abstract_ns = cfg!(any(target_os = "linux", target_os = "android"));
+    if cfg!(windows) || (private_dir.is_none() && abstract_ns) {
         Ok((base.to_ns_name::<GenericNamespaced>()?, None))
     } else {
         let dir = private_dir
@@ -68,6 +73,26 @@ fn socket_name() -> io::Result<(Name<'static>, Option<PathBuf>)> {
             .to_fs_name::<GenericFilePath>()?;
         Ok((name, Some(path)))
     }
+}
+
+/// A directory only this user can enter: `$XDG_RUNTIME_DIR` (mode 0700 by
+/// the spec) where there is one; on macOS the per-user temporary directory
+/// launchd hands out in `$TMPDIR` (`/var/folders/…/T`, mode 0700), never
+/// the shared `/tmp`.
+fn private_runtime_dir() -> Option<PathBuf> {
+    if let Some(dir) = dirs::runtime_dir().filter(|d| d.is_dir()) {
+        return Some(dir);
+    }
+    if cfg!(target_os = "macos") {
+        let dir = std::env::temp_dir();
+        let shared = ["/tmp", "/private/tmp"]
+            .iter()
+            .any(|shared| dir.starts_with(shared));
+        if !shared && dir.is_dir() {
+            return Some(dir);
+        }
+    }
+    None
 }
 
 /// Hands `paths` to a running instance. `Ok(true)` when one took them,
