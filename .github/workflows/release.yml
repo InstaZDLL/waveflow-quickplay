@@ -42,7 +42,66 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: cargo test --locked
       - run: cargo install cargo-packager --locked
+
+      # Authenticode, with WaveFlow's certificate (the same two secrets as
+      # the WaveFlow and Resona repositories). It is self-signed: files are
+      # signed (tampering shows) but Windows does not trust the publisher,
+      # so SmartScreen still warns. A certificate from a CA in Microsoft's
+      # Trusted Root Program in the same two secrets is all it takes to
+      # change that. cargo-packager signs the executable, the uninstaller
+      # and the installer with signtool, by the thumbprint of a certificate
+      # in the store.
+      - name: Import the signing certificate
+        shell: pwsh
+        env:
+          PFX_BASE64: ${{ secrets.SIGNTOOL_PFX_BASE64 }}
+          PFX_PASSWORD: ${{ secrets.SIGNTOOL_PFX_PASSWORD }}
+        run: |
+          if (-not $env:PFX_BASE64 -or -not $env:PFX_PASSWORD) {
+            Write-Error "SIGNTOOL_PFX_BASE64 and SIGNTOOL_PFX_PASSWORD are required to publish a release"
+            exit 1
+          }
+          Write-Host "::add-mask::$env:PFX_PASSWORD"
+          $pfx = Join-Path $env:RUNNER_TEMP "signing.pfx"
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:PFX_BASE64))
+          $password = ConvertTo-SecureString $env:PFX_PASSWORD -AsPlainText -Force
+          $cert = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $password
+          Remove-Item $pfx
+          if (-not $cert.HasPrivateKey) { Write-Error "the PFX has no private key"; exit 1 }
+          $thumbprint = $cert.Thumbprint
+          Write-Host "Signing with $($cert.Subject) ($thumbprint), valid until $($cert.NotAfter)"
+          "SIGNING_THUMBPRINT=$thumbprint" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          # The thumbprint is public; the private key stays in the store.
+          @"
+
+          [package.metadata.packager.windows]
+          digest-algorithm = "SHA256"
+          certificate-thumbprint = "$thumbprint"
+          timestamp-url = "http://timestamp.digicert.com"
+          tsp = true
+          "@ | Add-Content Cargo.toml
+
       - run: cargo packager --release --formats nsis
+
+      - name: Check the signatures
+        shell: pwsh
+        run: |
+          $files = @(Get-ChildItem target/packager/*.exe) + @(Get-Item target/release/waveflow-quickplay.exe)
+          foreach ($file in $files) {
+            $sig = Get-AuthenticodeSignature $file.FullName
+            # A self-signed certificate reads "UnknownError" (untrusted root):
+            # what matters is that it is ours and timestamped.
+            if ($sig.SignerCertificate.Thumbprint -ne $env:SIGNING_THUMBPRINT) {
+              Write-Error "$($file.Name) is not signed with the release certificate ($($sig.Status))"
+              exit 1
+            }
+            if (-not $sig.TimeStamperCertificate) {
+              Write-Error "$($file.Name) has no timestamp"
+              exit 1
+            }
+            Write-Host "$($file.Name): signed by $($sig.SignerCertificate.Subject), $($sig.Status)"
+          }
+
       - name: Checksums
         shell: pwsh
         run: |

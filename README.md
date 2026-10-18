@@ -121,7 +121,7 @@
 
 ## Install
 
-Grab the package for your system from the [latest release](https://github.com/InstaZDLL/waveflow-quickplay/releases/latest):
+Grab the package for your system from the [latest release](https://github.com/InstaZDLL/waveflow-quickplay/releases/latest). The Windows files are signed with WaveFlow's self-signed Authenticode certificate, so SmartScreen may still warn once.
 
 - **Windows**: `waveflow-quickplay_<version>_x64-setup.exe`, a per-user installer (no administrator rights) that also registers the context-menu entries and removes them on uninstall.
 - **Linux**: a `.deb` for Debian / Ubuntu or an `.AppImage` for any distribution, both with the desktop entry and the audio MIME types.
