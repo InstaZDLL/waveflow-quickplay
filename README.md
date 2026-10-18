@@ -27,7 +27,7 @@ cargo test
 ```
 
 `RUST_LOG=debug` turns the log up (stderr). `QUICKPLAY_CAPTURE_DIR=<dir>` writes a
-PNG of each window (`player.png`, `playlist.png`) 2 s after start (or
+PNG of the player window (`player.png`) 2 s after start (or
 `QUICKPLAY_CAPTURE_AFTER_MS`), for testing on displays that cannot be grabbed
 from outside such as GNOME on Wayland. Preferences live in
 `<config dir>/waveflow-quickplay/settings.json` (`%APPDATA%` on Windows,
@@ -142,6 +142,23 @@ with the Tauri desktop app was made, so no claim is made about it.
 | CPU while playing, spectrum shown        | 11.4 %  | same; the visualizer repaints the window at ~30 Hz          |
 | CPU while paused                         | 0.0 %   | same, egui repaints only on input                           |
 | Release binary                           | 30.7 MB | `target/release/waveflow-quickplay.exe` (16.4 MB of it is the embedded Noto Sans CJK, 0.8 MB Inter) |
+
+Fedora 44, GNOME 50.5 on Wayland (also run under XWayland), same build
+profile, same file, stereo 44.1 kHz output, 2026-10-18:
+
+| Metric                                   | Value   | How                                                        |
+| ---------------------------------------- | ------- | ---------------------------------------------------------- |
+| Process start → first frame              | 62 ms   | `window ready elapsed_ms=…` (66 ms under XWayland)          |
+| Resident set, playing with cover shown   | 92 MB   | `/proc/<pid>/status` RSS (96 MB under XWayland)             |
+| CPU while playing, spectrum shown        | 6.8 %   | utime+stime delta over 10 s, one core = 100 %               |
+| Release binary                           | 33.1 MB | `target/release/waveflow-quickplay`                         |
+| Clean release build                      | 2 min 42 s | 8 cores, cmake + libopus included                        |
+
+Verified there: rendering (fonts, cover, spectrum) identical to Windows,
+Opus / AAC / FLAC playback, the playlist window opening beside the player,
+and under XWayland the playlist following the player when it is moved
+(`wmctrl`). Wayland does not let an application position its windows, so
+the playlist opens where GNOME puts it and does not follow the player.
 
 The working set is dominated by the OpenGL driver and the decoded cover
 (up to 1024² RGBA); the audio threads themselves are small.

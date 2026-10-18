@@ -3,9 +3,11 @@
 //! scripts, and a Wayland window cannot be grabbed from outside).
 //!
 //! `QUICKPLAY_CAPTURE_DIR=<dir>` makes the app ask egui for a screenshot of
-//! every open window `QUICKPLAY_CAPTURE_AFTER_MS` (default 2000 ms) after
-//! start and write them as `<dir>/player.png` and `<dir>/playlist.png`.
-//! Nothing happens when the variable is unset.
+//! the player window `QUICKPLAY_CAPTURE_AFTER_MS` (default 2000 ms) after
+//! start and write it as `<dir>/player.png`. Nothing happens when the
+//! variable is unset. The player only: eframe 0.36 serves screenshot
+//! requests for the root viewport and drops them for immediate child
+//! viewports such as the playlist.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -37,9 +39,8 @@ impl Capture {
     }
 
     /// Called once per frame from the root viewport: keeps the window
-    /// repainting until the delay has passed, then requests one screenshot
-    /// of each listed viewport.
-    pub fn tick(&mut self, ctx: &egui::Context, viewports: &[ViewportId]) {
+    /// repainting until the delay has passed, then requests the screenshot.
+    pub fn tick(&mut self, ctx: &egui::Context) {
         if self.requested {
             return;
         }
@@ -48,15 +49,16 @@ impl Capture {
             ctx.request_repaint_after(self.after - elapsed);
             return;
         }
-        for &id in viewports {
-            ctx.send_viewport_cmd_to(id, ViewportCommand::Screenshot(UserData::default()));
-        }
+        ctx.send_viewport_cmd_to(
+            ViewportId::ROOT,
+            ViewportCommand::Screenshot(UserData::default()),
+        );
         self.requested = true;
     }
 
-    /// Writes any screenshot delivered to the current viewport's input as
-    /// `<dir>/<name>.png`.
-    pub fn save(&self, ctx: &egui::Context, name: &str) {
+    /// Writes any screenshot delivered to the root viewport's input as
+    /// `<dir>/player.png`.
+    pub fn save(&self, ctx: &egui::Context) {
         let images: Vec<_> = ctx.input(|i| {
             i.events
                 .iter()
@@ -67,7 +69,7 @@ impl Capture {
                 .collect()
         });
         for image in images {
-            let path = self.dir.join(format!("{name}.png"));
+            let path = self.dir.join("player.png");
             let (w, h) = (image.width() as u32, image.height() as u32);
             let Some(buf) = image::RgbaImage::from_raw(w, h, image.as_raw().to_vec()) else {
                 tracing::warn!(w, h, "capture: unexpected buffer size");

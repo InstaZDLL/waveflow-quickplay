@@ -766,8 +766,12 @@ impl QuickPlayApp {
         let mut builder = ViewportBuilder::default()
             .with_title(PLAYLIST_TITLE)
             .with_app_id(APP_ID)
-            // One taskbar button for the pair, as PotPlayer's playlist.
+            // One taskbar button for the pair, as PotPlayer's playlist:
+            // `with_taskbar` acts on Windows, the X11 window type tells other
+            // window managers the same thing (utility windows get no taskbar
+            // entry and stay with their application).
             .with_taskbar(false)
+            .with_window_type(egui::X11WindowType::Utility)
             .with_inner_size([w, h])
             .with_min_inner_size([240.0, 160.0])
             .with_drag_and_drop(true)
@@ -778,7 +782,6 @@ impl QuickPlayApp {
         let snapshot = self.shortcut_snapshot();
         let queue = &self.queue;
         let selected = self.selected;
-        let capture = self.capture.as_ref();
         let mut size: Option<Vec2> = None;
         let mut outer: Option<Rect> = None;
         let mut dropped: Vec<PathBuf> = Vec::new();
@@ -801,9 +804,6 @@ impl QuickPlayApp {
             }
             // Keys typed into this window land in its own input stream.
             collect_shortcuts(ui.ctx(), snapshot, actions);
-            if let Some(capture) = capture {
-                capture.save(ui.ctx(), "playlist");
-            }
             playlist::show(ui, queue, selected, actions);
             close
         });
@@ -901,12 +901,8 @@ impl eframe::App for QuickPlayApp {
         self.track_window_size(ctx);
         self.sync_playlist_minimized(ctx);
         if let Some(capture) = self.capture.as_mut() {
-            let mut ids = vec![ViewportId::ROOT];
-            if self.settings.show_playlist {
-                ids.push(Self::playlist_viewport_id());
-            }
-            capture.tick(ctx, &ids);
-            capture.save(ctx, "player");
+            capture.tick(ctx);
+            capture.save(ctx);
         }
         if self
             .status
