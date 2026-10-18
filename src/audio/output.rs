@@ -109,8 +109,8 @@ fn output_thread_main(
 
 fn device_name(device: &cpal::Device) -> Option<String> {
     let desc = device.description().ok()?;
-    if let Some(friendly) = desc.extended().first() {
-        return Some(friendly.clone());
+    if let Some(friendly) = desc.extended().next() {
+        return Some(friendly.to_string());
     }
     Some(desc.name().to_string())
 }
@@ -166,10 +166,10 @@ fn open_stream<T>(
 where
     T: cpal::SizedSample + cpal::FromSample<f32> + Send + 'static,
 {
-    let err_fn = move |err: cpal::StreamError| on_error(format!("audio device error: {err}"));
+    let err_fn = move |err: cpal::Error| on_error(format!("audio device error: {err}"));
     device
         .build_output_stream(
-            config,
+            *config,
             move |out: &mut [T], _info: &cpal::OutputCallbackInfo| {
                 // Drain before pause: a flush requested while paused must
                 // empty the ring, or Stop from Paused would wait out the
