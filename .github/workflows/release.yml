@@ -167,6 +167,17 @@ jobs:
         with:
           ref: ${{ env.RELEASE_TAG }}
           persist-credentials: false
+      # The packaging definitions (desktop entries, rpm.toml) come from the
+      # workflow's own ref: on a tag push that is the tag itself, on a
+      # manual run it is the branch chosen, so a package format added after
+      # a release can be built for it.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          path: workflow-ref
+          sparse-checkout: packaging
+          persist-credentials: false
+      - run: cp -r workflow-ref/packaging/. packaging/
       - run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends cmake libasound2-dev libxkbcommon-dev libwayland-dev libfuse2 file rpm
@@ -177,9 +188,11 @@ jobs:
       - run: cargo packager --release --formats deb,appimage
       # The .rpm comes from cargo-generate-rpm (cargo-packager has no rpm
       # format), from the binary cargo-packager just built; its contents
-      # and dependencies are listed under [package.metadata.generate-rpm].
+      # and dependencies are the [package.metadata.generate-rpm] section
+      # kept in packaging/rpm.toml, appended to Cargo.toml here.
       - name: RPM
         run: |
+          cat packaging/rpm.toml >> Cargo.toml
           cargo generate-rpm --payload-compress zstd
           rpm=$(ls target/generate-rpm/*.rpm)
           mv "$rpm" target/packager/

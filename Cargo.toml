@@ -157,32 +157,3 @@ package-name = "waveflow-quickplay"
 desktop-template = "packaging/quickplay.desktop"
 depends = ["libasound2 | libasound2t64", "libxkbcommon0", "libwayland-client0", "libgl1"]
 section = "sound"
-
-# .rpm for Fedora / RHEL / openSUSE, built by cargo-generate-rpm from the
-# release binary (cargo-packager has no rpm format). Dependencies are listed
-# as soname capabilities; file triggers of desktop-file-utils
-# and hicolor-icon-theme refresh the caches, so no scriptlet is needed.
-[package.metadata.generate-rpm]
-name = "waveflow-quickplay"
-summary = "A small, fast, native music player: double-click a file, hear it now"
-license = "GPL-3.0-only"
-url = "https://github.com/InstaZDLL/waveflow-quickplay"
-auto-req = "no"
-assets = [
-    { source = "target/release/waveflow-quickplay", dest = "/usr/bin/waveflow-quickplay", mode = "755" },
-    { source = "packaging/app.waveflow.quickplay.desktop", dest = "/usr/share/applications/app.waveflow.quickplay.desktop", mode = "644" },
-    { source = "assets/icon-128.png", dest = "/usr/share/icons/hicolor/128x128/apps/app.waveflow.quickplay.png", mode = "644" },
-    { source = "LICENSE", dest = "/usr/share/licenses/waveflow-quickplay/LICENSE", mode = "644", doc = true },
-    { source = "README.md", dest = "/usr/share/doc/waveflow-quickplay/README.md", mode = "644", doc = true },
-]
-
-[package.metadata.generate-rpm.requires]
-# Soname capabilities, as rpm itself would derive them: only libasound is
-# linked; wayland, xkbcommon and EGL/GL are dlopen-ed at run time, so they
-# are named here, the way they are provided (alsa-lib, libwayland-client,
-# libxkbcommon, libglvnd-egl, libglvnd-glx on Fedora).
-"libasound.so.2()(64bit)" = "*"
-"libwayland-client.so.0()(64bit)" = "*"
-"libxkbcommon.so.0()(64bit)" = "*"
-"libEGL.so.1()(64bit)" = "*"
-"libGL.so.1()(64bit)" = "*"

@@ -198,7 +198,7 @@ cargo test
 cargo install cargo-packager cargo-generate-rpm
 cargo packager --release --formats nsis          # Windows: per-user installer
 cargo packager --release --formats deb,appimage  # Linux
-cargo generate-rpm                               # Linux: .rpm from the release binary
+cat packaging/rpm.toml >> Cargo.toml && cargo generate-rpm   # Linux: .rpm
 ```
 
 The installers come out in `target/packager/`. The NSIS template in
