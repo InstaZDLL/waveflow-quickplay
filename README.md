@@ -1,0 +1,151 @@
+# WaveFlow QuickPlay
+
+A standalone, lightweight audio player for WaveFlow — a native egui/eframe
+window that plays local files without launching the Tauri desktop app.
+Experimental: its purpose is to evaluate whether egui + eframe is a practical
+companion to WaveFlow Desktop.
+
+```text
+waveflow-quickplay "C:\Music\song.flac"
+waveflow-quickplay song1.flac song2.mp3 song3.m4a
+waveflow-quickplay "C:\Music\Some Album"      # folders are walked (4 levels)
+```
+
+## Build and run
+
+Requirements: the WaveFlow repository checked out next to this folder
+(`../WaveFlow`), Rust 1.98 (pinned by `rust-toolchain.toml`) and cmake (for
+the vendored libopus that `waveflow-core` builds, as the desktop app does).
+
+```bash
+cargo run --release -- <files or folders>
+cargo build --release          # → target/release/waveflow-quickplay(.exe)
+
+cargo fmt --check
+cargo clippy --all-targets
+cargo test
+```
+
+`RUST_LOG=debug` turns the log up (stderr). Preferences live in
+`<config dir>/waveflow-quickplay/settings.json` (`%APPDATA%` on Windows,
+`~/.config` on Linux) — a namespace of its own, never read by the desktop
+app.
+
+### Keyboard
+
+| Key                | Action                       |
+| ------------------ | ---------------------------- |
+| Space              | Play / pause                 |
+| N / P              | Next / previous              |
+| ← / → (Shift: 30 s) | Seek ±5 s                    |
+| ↑ / ↓              | Volume ±5 %                  |
+| A                  | Show / hide the artwork      |
+| L                  | Show / hide the playlist     |
+| T                  | Always on top                |
+| Ctrl+O             | Open files                   |
+| Delete (playlist)  | Remove the selected track    |
+
+Files and folders can be dropped on either window; double-click a playlist
+row to play it; right-click for Play / Remove.
+
+## Architecture
+
+```text
+WaveFlow/src-tauri/crates/core   (waveflow-core, path dependency)
+   ├── audio_format::opus::codecs()   the one codec registry (symphonia + libopus)
+   ├── audio_format::dsd              DSF / DFF parser, 1-bit → PCM converter, tags
+   └── scanner::extract               AUDIO_EXTENSIONS, is_scannable_audio,
+                                      read_tagged_file, probe_playable_stream, file_type_label
+
+waveflow-quickplay
+   ├── src/main.rs        CLI, logging, eframe window
+   ├── src/app.rs         QuickPlayApp: queue + engine + loader + window state, applies UI actions
+   ├── src/audio/         the playback pipeline (see below)
+   ├── src/library.rs     tags / duration / cover reads on two worker threads
+   ├── src/queue.rs       the playlist model
+   ├── src/config.rs      settings.json
+   └── src/ui/            theme, painted icons, widgets, player pane, playlist window
+```
+
+### Playback pipeline
+
+The desktop engine (`crates/app/src/audio/`, ~10 000 lines across
+`engine.rs`, `decoder.rs`, `output.rs`) is built from a `tauri::AppHandle`:
+every state change is a Tauri event, the analytics task runs on
+`tauri::async_runtime` and writes `play_event` rows through the profile
+pool, and ReplayGain / crossfade / the output pin / exclusive mode are read
+from the profile database. It cannot be instantiated without a Tauri
+runtime, which QuickPlay must not start.
+
+QuickPlay therefore carries a reduced pipeline (`src/audio/`, ~700 lines)
+with the desktop's topology and invariants:
+
+```text
+UI thread (egui)  ──AudioCmd (crossbeam)──►  decoder thread (std)  ──f32 (rtrb SPSC)──►  cpal callback
+                  ◄──EngineEvent + repaint──  symphonia / DSD → convert_channels → rubato
+                  reads SharedPlayback atomics (position, state, volume)
+```
+
+- the cpal callback never allocates, locks or logs; it pops the ring,
+  applies the volume and advances `samples_played`, the only position clock;
+- `paused_output` (silence, no pop) and `drain_silent` (bulk pop + silence)
+  give instant pause and clean seeks, as in the desktop engine;
+- streams open through `waveflow_core::audio_format::opus::codecs()`, so
+  QuickPlay plays exactly the formats the desktop plays, Opus included
+  (MP3, FLAC, WAV, AIFF, Vorbis, Opus, AAC, ALAC, DSF, DFF);
+- a track ends only once its tail has left the ring; the UI then loads the
+  next queue entry;
+- the engine is created lazily on the first load and released (decoder
+  joined, stream dropped) on exit.
+
+What is deliberately **not** here: crossfade, gapless, ReplayGain, EQ,
+exclusive output, device selection, radio / remote sources, analytics.
+
+### Windows
+
+The main window has a custom title bar (drag, pin, minimize, close) and
+resize edges — `with_decorations(false)` plus `ViewportCommand::StartDrag`
+/ `BeginResize`. Compact mode locks the height to the controls block;
+artwork mode adds the cover above it and makes the window freely
+resizable. The playlist is a second native window (`show_viewport_immediate`)
+placed beside the player; where the backend cannot open a second window,
+egui embeds it as a floating panel instead.
+
+## Measurements
+
+Windows 11, release profile (`opt-level = 3`, thin LTO, stripped), 2026-10-18,
+playing a 48 kHz AAC file resampled to a 44.1 kHz 7.1 output. No comparison
+with the Tauri desktop app was made, so no claim is made about it.
+
+| Metric                                   | Value   | How                                                        |
+| ---------------------------------------- | ------- | ---------------------------------------------------------- |
+| Process start → first frame              | 276 ms  | `window ready elapsed_ms=…` in the log (Instant at main)    |
+| Working set, playing with cover shown    | 88 MB   | `Get-Process` WorkingSet64 / PrivateMemorySize64 (85 MB)   |
+| CPU while playing (decode + resample)    | 3.8 %   | TotalProcessorTime delta over 10 s, one core = 100 %        |
+| CPU while paused                         | 0.0 %   | same, egui repaints only on input                           |
+| Release binary                           | 30.7 MB | `target/release/waveflow-quickplay.exe` (16.4 MB of it is the embedded Noto Sans CJK, 0.8 MB Inter) |
+
+The working set is dominated by the OpenGL driver and the decoded cover
+(up to 1024² RGBA); the audio threads themselves are small.
+
+## Known limitations
+
+- Fonts: Inter (Regular + SemiBold, the desktop app's face) and Noto Sans
+  CJK (Chinese, Japanese, Korean) are embedded; a system face is appended as
+  a last fallback for anything else. The CJK file is 16 MB of the binary.
+- Output device: the OS default, opened at its default configuration
+  (shared mode). No device picker, no exclusive mode.
+- The `[patch.crates-io] glib` RUSTSEC backport of the WaveFlow workspace
+  does not apply here (patches must sit at the workspace root); only Linux
+  builds pull glib, through rfd's GTK dialog.
+- One copy of the pipeline per application. If the prototype is adopted,
+  the next step is a Tauri-free `waveflow-audio` crate with an event-sink
+  trait, which both the desktop engine and QuickPlay would consume.
+
+## Bundled assets
+
+| File | Author | Source | License |
+| --- | --- | --- | --- |
+| `assets/fonts/Inter-Regular.ttf`, `Inter-SemiBold.ttf` | The Inter Project Authors | https://github.com/rsms/inter | OFL-1.1 (`assets/fonts/OFL-Inter.txt`) |
+| `assets/fonts/NotoSansCJKsc-Regular.otf` | Google, Adobe (Noto CJK) | https://github.com/notofonts/noto-cjk | OFL-1.1 (`assets/fonts/OFL-NotoSansCJK.txt`) |
+| `assets/icon-128.png`, `assets/icon.ico` | WaveFlow | `src-tauri/crates/app/icons/` | GPL-3.0-only (project) |

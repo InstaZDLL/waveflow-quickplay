@@ -1,0 +1,105 @@
+[package]
+name = "waveflow-quickplay"
+version = "0.1.0"
+description = "WaveFlow QuickPlay — a standalone, lightweight egui/eframe audio player built on WaveFlow's Rust audio infrastructure."
+authors = ["InstaZDLL <github.105mh@8shield.net>"]
+edition = "2021"
+license = "GPL-3.0-only"
+repository = "https://github.com/InstaZDLL/WaveFlow"
+homepage = "https://waveflow.app"
+publish = false
+
+# The prototype lives next to the WaveFlow checkout and takes the portable
+# crate by path. Promoting it to a workspace member later is a one-line
+# move: `members = [..., "crates/quickplay"]` in `src-tauri/Cargo.toml` and
+# `path = "../core"` here. It is kept outside for now so the desktop app's
+# `Cargo.lock` (and the Flatpak sources generated from it) stay untouched
+# while egui / eframe are being evaluated.
+
+[dependencies]
+# ── WaveFlow shared infrastructure ───────────────────────────────────────
+# `waveflow-core`: the one codec registry (`audio_format::opus::codecs()`,
+# symphonia + libopus), the DSD parser + PCM converter, the scanner's tag /
+# cover / probe helpers and `AUDIO_EXTENSIONS`. Default features keep Opus
+# on, which builds the vendored libopus and therefore needs cmake — the same
+# requirement the desktop app already has. `sqlite` / `plugins` are left
+# off: no database, no plugin host in QuickPlay.
+waveflow-core = { path = "../WaveFlow/src-tauri/crates/core" }
+
+# ── UI ──────────────────────────────────────────────────────────────────
+# glow (OpenGL) rather than wgpu: a smaller dependency tree, a faster cold
+# start and no shader-compiler lookups — the footprint is the point of the
+# prototype. `default_fonts` ships egui's bundled Latin fonts.
+eframe = { version = "0.36", default-features = false, features = [
+    "glow",
+    "default_fonts",
+    "wayland",
+    "x11",
+] }
+egui = "0.36"
+
+# ── Audio pipeline (the same crates and versions the desktop engine uses) ─
+cpal = "0.17"
+rtrb = "0.4"
+rubato = "5.0"
+crossbeam-channel = "0.5"
+symphonia = { version = "0.6", default-features = false, features = [
+    "mp3",
+    "flac",
+    "wav",
+    "aiff",
+    "vorbis",
+    "ogg",
+    "aac",
+    "alac",
+    "isomp4",
+    "pcm",
+    "all-meta",
+] }
+
+# ── Metadata + artwork ──────────────────────────────────────────────────
+# lofty is reached through `waveflow_core::scanner::extract::read_tagged_file`,
+# which returns a `lofty::file::TaggedFile`; the crate is named here only to
+# call methods on that value (same minor as core, so one build).
+lofty = "0.25"
+# Cover bytes → RGBA for the egui texture. Same feature set as core.
+image = { version = "0.25", default-features = false, features = [
+    "jpeg",
+    "png",
+    "webp",
+    "bmp",
+    "gif",
+    "tiff",
+] }
+
+# ── Desktop glue ────────────────────────────────────────────────────────
+# Same pin + features as the desktop app so the two resolve to one copy.
+rfd = { version = "0.17", default-features = false, features = [
+    "gtk3",
+    "common-controls-v6",
+] }
+dirs = "7"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[build-dependencies]
+# Embeds the icon + VERSIONINFO into the Windows executable only; a no-op
+# elsewhere (see build.rs).
+winresource = "0.1"
+
+[profile.dev]
+opt-level = 1
+
+# Decoders, the resampler and the DSD FIR are far too slow unoptimised to
+# keep a 48 kHz ring fed; the desktop app has the same problem in `tauri dev`.
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "unwind"
