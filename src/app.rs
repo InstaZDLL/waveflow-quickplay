@@ -757,6 +757,16 @@ impl QuickPlayApp {
                     Lang::from_code(&code).map_or_else(String::new, |l| l.code().to_string());
                 self.lang = Lang::resolve(&self.settings.language);
                 self.settings.save();
+                // The file-manager entries carry the labels of one
+                // language on Windows: rewrite them when this executable
+                // is the registered one. `reg import` takes a moment, so
+                // off the UI thread.
+                let lang = self.lang;
+                std::thread::spawn(move || match crate::integration::relabel(lang) {
+                    Ok(true) => tracing::info!(lang = lang.code(), "file-manager labels rewritten"),
+                    Ok(false) => {}
+                    Err(err) => tracing::warn!(%err, "file-manager labels not rewritten"),
+                });
             }
         }
     }

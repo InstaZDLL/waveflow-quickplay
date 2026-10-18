@@ -28,14 +28,29 @@ fn exe_path() -> io::Result<PathBuf> {
 
 /// `lang` is the language of the menu labels: on Windows the registry holds
 /// one label per verb, so the labels are written in the interface language
-/// in force at registration; the Linux desktop entry carries every language
-/// and the desktop picks.
+/// in force at registration (and rewritten by [`relabel`] when it changes);
+/// the Linux desktop entry carries every language and the desktop picks.
 pub fn register(lang: Lang) -> io::Result<String> {
     platform::register(&exe_path()?, lang.strings())
 }
 
 pub fn unregister() -> io::Result<String> {
     platform::unregister()
+}
+
+/// Rewrites the file-manager labels in `lang` when this executable is the
+/// registered one, so a language picked in the settings reaches the
+/// context menu too. `Ok(false)` when nothing is registered, or another
+/// copy of QuickPlay is (a development build must not hijack the menu of
+/// the installed one). A no-op where the entries already carry every
+/// language.
+pub fn relabel(lang: Lang) -> io::Result<bool> {
+    let exe = exe_path()?;
+    if !platform::is_registered_at(&exe) {
+        return Ok(false);
+    }
+    platform::register(&exe, lang.strings())?;
+    Ok(true)
 }
 
 #[cfg(windows)]
@@ -137,7 +152,53 @@ mod platform {
         s
     }
 
+    /// The executable the "Open with" entry points at, when QuickPlay is
+    /// registered for this user: the quoted path at the start of
+    /// `Applications\waveflow-quickplay.exe\shell\open\command`.
+    fn registered_exe() -> Option<PathBuf> {
+        use windows_sys::Win32::System::Registry::{
+            RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_SZ,
+        };
+        let subkey: Vec<u16> =
+            r"Software\Classes\Applications\waveflow-quickplay.exe\shell\open\command"
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect();
+        let mut buf = [0u16; 2048];
+        let mut size = (buf.len() * 2) as u32;
+        // SAFETY: documented call; `buf` and `size` describe a buffer we
+        // own, and `size` comes back as the bytes written (NUL included).
+        let status = unsafe {
+            RegGetValueW(
+                HKEY_CURRENT_USER,
+                subkey.as_ptr(),
+                std::ptr::null(),
+                RRF_RT_REG_SZ,
+                std::ptr::null_mut(),
+                buf.as_mut_ptr().cast(),
+                &mut size,
+            )
+        };
+        if status != 0 {
+            return None;
+        }
+        let len = (size as usize / 2).saturating_sub(1).min(buf.len());
+        let command = String::from_utf16_lossy(&buf[..len]);
+        let rest = command.strip_prefix('"')?;
+        let end = rest.find('"')?;
+        Some(PathBuf::from(&rest[..end]))
+    }
+
+    pub fn is_registered_at(exe: &std::path::Path) -> bool {
+        registered_exe().is_some_and(|registered| {
+            registered
+                .to_string_lossy()
+                .eq_ignore_ascii_case(&exe.to_string_lossy())
+        })
+    }
+
     fn import(script: &str) -> io::Result<()> {
+        use std::os::windows::process::CommandExt;
         // reg.exe reads ANSI or UTF-16LE with BOM; the path may be non-ASCII.
         let mut bytes: Vec<u8> = vec![0xFF, 0xFE];
         for unit in script.encode_utf16() {
@@ -146,7 +207,14 @@ mod platform {
         let path =
             std::env::temp_dir().join(format!("waveflow-quickplay-{}.reg", std::process::id()));
         std::fs::write(&path, bytes)?;
-        let status = Command::new("reg").arg("import").arg(&path).status();
+        // CREATE_NO_WINDOW: called from the GUI too, where a console
+        // window flashing up for reg.exe would be a surprise.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let status = Command::new("reg")
+            .arg("import")
+            .arg(&path)
+            .creation_flags(CREATE_NO_WINDOW)
+            .status();
         let _ = std::fs::remove_file(&path);
         match status {
             Ok(s) if s.success() => Ok(()),
@@ -254,6 +322,12 @@ mod platform {
         out
     }
 
+    /// The desktop entry carries every language, so there is never
+    /// anything to rewrite.
+    pub fn is_registered_at(_exe: &std::path::Path) -> bool {
+        false
+    }
+
     fn refresh() {
         if let Ok(dir) = data_dir() {
             let _ = std::process::Command::new("update-desktop-database")
@@ -317,6 +391,10 @@ mod platform {
 #[cfg(not(any(windows, target_os = "linux")))]
 mod platform {
     use super::*;
+
+    pub fn is_registered_at(_exe: &std::path::Path) -> bool {
+        false
+    }
 
     pub fn register(_exe: &std::path::Path, _t: &Strings) -> io::Result<String> {
         Err(io::Error::other(

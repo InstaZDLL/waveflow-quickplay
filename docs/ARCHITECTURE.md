@@ -132,8 +132,11 @@ half a second of each other are merged into one queue replacement.
 an "Open with" entry on Windows (`HKCU\Software\Classes`), or a `.desktop`
 entry with the audio MIME types and an "Add to playlist" action on Linux.
 The labels come from the interface language; the desktop entry carries all
-of them. `--unregister` removes everything. The Windows installer runs both
-at install and uninstall time.
+of them, and on Windows a language picked in the settings rewrites the
+registry labels when the running executable is the registered one (checked
+against the "Open with" command, so a development build never redirects
+the installed menu). `--unregister` removes everything. The Windows
+installer runs both at install and uninstall time.
 
 ## Languages
 

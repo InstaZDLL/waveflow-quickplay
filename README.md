@@ -136,7 +136,7 @@ They are complementary, not two sizes of the same thing: QuickPlay deliberately 
 
 - The gear in the title bar opens a page in place of the controls: the interface language, and an about block with the version, the licence and the link to this repository. `Esc` or its close button brings the controls back.
 - **Eight languages**: English, French, German, Spanish, Italian, Simplified Chinese, Japanese and Korean. The system language is followed by default; a choice is kept in the settings file.
-- The context-menu labels follow the language in force when `--register` runs; the Linux desktop entry carries all eight and the desktop picks.
+- The file-manager entries follow the interface language: on Windows, picking another language rewrites the context-menu labels of the registered QuickPlay; the Linux desktop entry carries all eight and the desktop picks.
 
 ### ✨ And also
 
