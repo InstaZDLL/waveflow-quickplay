@@ -34,6 +34,7 @@ pub enum Action {
     SetVolume(f32),
     ToggleExpanded,
     TogglePlaylist,
+    ToggleSpectrum,
     ClosePlaylist,
     TogglePin,
     Minimize,
@@ -61,6 +62,8 @@ pub struct PlayerView<'a> {
     pub volume: f32,
     pub expanded: bool,
     pub playlist_open: bool,
+    /// Bar heights in 0..1, `None` when the visualizer is hidden.
+    pub spectrum: Option<&'a [f32]>,
     pub always_on_top: bool,
     pub has_track: bool,
     pub has_prev: bool,

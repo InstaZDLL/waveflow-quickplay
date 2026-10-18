@@ -6,6 +6,9 @@
 //! silence written on an underrun), and only the decoder resets it.
 
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, AtomicU8, Ordering};
+use std::sync::Mutex;
+
+use super::spectrum::SpectrumQueue;
 
 /// High-level player lifecycle, stored as an `AtomicU8`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +40,15 @@ pub struct SharedPlayback {
     /// Callback bulk-pops the ring and writes silence: a load or a seek
     /// flushes the old position so its tail never reaches the device.
     pub drain_silent: AtomicBool,
+    /// Interleaved samples the decoder has pushed into the ring since the
+    /// clock was last restarted — the output clock the spectrum frames are
+    /// timed against. Decoder writes, UI reads; never the callback.
+    pub samples_pushed: AtomicU64,
+    /// Whether the decoder analyses the spectrum at all.
+    pub spectrum_enabled: AtomicBool,
+    /// Analysed frames waiting for their play position. Decoder and UI
+    /// threads only.
+    pub spectrum: Mutex<SpectrumQueue>,
 }
 
 impl SharedPlayback {
@@ -50,6 +62,9 @@ impl SharedPlayback {
             base_offset_ms: AtomicU64::new(0),
             paused_output: AtomicBool::new(false),
             drain_silent: AtomicBool::new(false),
+            samples_pushed: AtomicU64::new(0),
+            spectrum_enabled: AtomicBool::new(true),
+            spectrum: Mutex::new(SpectrumQueue::default()),
         }
     }
 
@@ -96,6 +111,24 @@ impl SharedPlayback {
     pub fn restart_clock(&self, ms: u64) {
         self.base_offset_ms.store(ms, Ordering::Release);
         self.samples_played.store(0, Ordering::Release);
+        self.samples_pushed.store(0, Ordering::Release);
+        self.clear_spectrum();
+    }
+
+    pub fn clear_spectrum(&self) {
+        self.spectrum
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+    }
+
+    /// The spectrum frame due at the current output position, if any.
+    pub fn take_due_spectrum(&self) -> Option<[f32; super::spectrum::BAND_COUNT]> {
+        let played = self.samples_played.load(Ordering::Acquire);
+        self.spectrum
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take_due(played)
     }
 }
 

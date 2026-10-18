@@ -41,6 +41,7 @@ app.
 | ↑ / ↓              | Volume ±5 %                  |
 | A                  | Show / hide the artwork      |
 | L                  | Show / hide the playlist     |
+| S (or click it)    | Show / hide the spectrum     |
 | T                  | Always on top                |
 | Ctrl+O             | Open files                   |
 | Delete (playlist)  | Remove the selected track    |
@@ -96,7 +97,11 @@ UI thread (egui)  ──AudioCmd (crossbeam)──►  decoder thread (std)  ─
 - a track ends only once its tail has left the ring; the UI then loads the
   next queue entry;
 - the engine is created lazily on the first load and released (decoder
-  joined, stream dropped) on exit.
+  joined, stream dropped) on exit;
+- the spectrum analyser (`src/audio/spectrum.rs`, the desktop's FFT and
+  band ladder without the Tauri emit) runs on the decoder thread and
+  timestamps every frame with the output position it belongs to, so the
+  bars follow what is heard rather than what is decoded.
 
 What is deliberately **not** here: crossfade, gapless, ReplayGain, EQ,
 exclusive output, device selection, radio / remote sources, analytics.
@@ -121,7 +126,8 @@ with the Tauri desktop app was made, so no claim is made about it.
 | ---------------------------------------- | ------- | ---------------------------------------------------------- |
 | Process start → first frame              | 276 ms  | `window ready elapsed_ms=…` in the log (Instant at main)    |
 | Working set, playing with cover shown    | 88 MB   | `Get-Process` WorkingSet64 / PrivateMemorySize64 (85 MB)   |
-| CPU while playing (decode + resample)    | 3.8 %   | TotalProcessorTime delta over 10 s, one core = 100 %        |
+| CPU while playing, spectrum hidden       | 3.8 %   | TotalProcessorTime delta over 10 s, one core = 100 %        |
+| CPU while playing, spectrum shown        | 11.4 %  | same; the visualizer repaints the window at ~30 Hz          |
 | CPU while paused                         | 0.0 %   | same, egui repaints only on input                           |
 | Release binary                           | 30.7 MB | `target/release/waveflow-quickplay.exe` (16.4 MB of it is the embedded Noto Sans CJK, 0.8 MB Inter) |
 

@@ -20,6 +20,7 @@ pub struct Settings {
     /// Linear gain in `[0, 1]`, as the engine applies it.
     pub volume: f32,
     pub show_playlist: bool,
+    pub show_spectrum: bool,
     pub playlist_size: [f32; 2],
 }
 
@@ -32,6 +33,7 @@ impl Default for Settings {
             always_on_top: false,
             volume: 0.8,
             show_playlist: false,
+            show_spectrum: true,
             playlist_size: [340.0, 420.0],
         }
     }

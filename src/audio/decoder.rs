@@ -13,6 +13,7 @@ use rtrb::Producer;
 
 use super::engine::{AudioCmd, EngineEvent};
 use super::output::RING_CAPACITY;
+use super::spectrum::SpectrumAnalyzer;
 use super::state::{PlayerState, SharedPlayback};
 use super::stream::ActiveStream;
 
@@ -166,9 +167,27 @@ struct Session<'a> {
     out: Vec<f32>,
     /// The stream has ended; its tail is still playing out of the ring.
     eof: Option<Instant>,
+    spectrum: SpectrumAnalyzer,
 }
 
 impl Session<'_> {
+    /// Hand the samples decoded since `before` to the analyser, timed to
+    /// the output clock: everything pushed so far plus everything still
+    /// waiting in `out` precedes them.
+    fn feed_spectrum(&mut self, before: usize, rate: u32, channels: usize) {
+        if self.out.len() <= before || !self.shared.spectrum_enabled.load(Ordering::Relaxed) {
+            return;
+        }
+        let ahead = self.shared.samples_pushed.load(Ordering::Acquire) + self.out.len() as u64;
+        let mut queue = self
+            .shared
+            .spectrum
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        self.spectrum
+            .feed(&self.out[before..], channels, rate, ahead, &mut queue);
+    }
+
     /// Apply one command. `Some(exit)` ends the track for the caller.
     fn handle(&mut self, cmd: AudioCmd) -> Option<Exit> {
         match cmd {
@@ -197,6 +216,7 @@ impl Session<'_> {
                 self.shared.paused_output.store(false, Ordering::Release);
                 drain_ring(self.producer, self.shared);
                 self.out.clear();
+                self.spectrum.discard_pending();
                 self.stream.seek_ms(ms);
                 self.stream.reset_decoder();
                 self.shared.restart_clock(ms);
@@ -238,6 +258,7 @@ fn play_track(
         stream,
         out: Vec::with_capacity(16_384),
         eof: None,
+        spectrum: SpectrumAnalyzer::new(),
     };
 
     loop {
@@ -268,7 +289,10 @@ fn play_track(
         // 3. Samples decoded earlier that did not fit: top the ring up, and
         //    when it is full come back to the command drain after a nap.
         if !session.out.is_empty() {
+            let before = session.out.len();
             push_samples(session.producer, &mut session.out);
+            let written = (before - session.out.len()) as u64;
+            shared.samples_pushed.fetch_add(written, Ordering::AcqRel);
             if !session.out.is_empty() {
                 std::thread::sleep(Duration::from_millis(5));
                 continue;
@@ -288,11 +312,13 @@ fn play_track(
         }
 
         // 5. Decode the next packet.
+        let before = session.out.len();
         match session
             .stream
             .decode_next(&mut session.out, &mut scratch, dst_rate, dst_channels)
         {
             Ok(false) => {
+                session.feed_spectrum(before, dst_rate, dst_channels);
                 if !logged_rate && session.stream.source_sample_rate() > 0 {
                     logged_rate = true;
                     tracing::debug!(

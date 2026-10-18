@@ -4,7 +4,7 @@
 use egui::{pos2, vec2, Align, Color32, Label, Layout, Rect, RichText, Ui};
 
 use super::icons::{self, Icon};
-use super::widgets::{bar_button, icon_button, slider};
+use super::widgets::{bar_button, icon_button, slider, spectrum_bars};
 use super::{format_time, theme, Action, PlayerView};
 use crate::audio::PlayerState;
 
@@ -24,6 +24,7 @@ pub fn controls(ui: &mut Ui, view: &PlayerView<'_>, actions: &mut Vec<Action>) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing = vec2(10.0, 0.0);
         let clock_w = 78.0;
+        let spectrum_w = if view.spectrum.is_some() { 112.0 } else { 0.0 };
         let (clock, _) = ui.allocate_exact_size(vec2(clock_w, 50.0), egui::Sense::hover());
         let painter = ui.painter();
         painter.text(
@@ -45,9 +46,23 @@ pub fn controls(ui: &mut Ui, view: &PlayerView<'_>, actions: &mut Vec<Action>) {
             theme::TEXT_DIM,
         );
 
+        // The visualizer sits at the right edge of the block; the titles get
+        // what is left between the clock and it.
+        if let Some(bands) = view.spectrum {
+            let right = ui.max_rect().right();
+            let area = Rect::from_min_max(
+                pos2(right - spectrum_w, clock.top() + 2.0),
+                pos2(right, clock.bottom() - 2.0),
+            );
+            if spectrum_bars(ui, area, bands).clicked() {
+                actions.push(Action::ToggleSpectrum);
+            }
+        }
+        let text_w = (ui.available_width() - spectrum_w - 10.0).max(60.0);
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing = vec2(0.0, 1.0);
             ui.set_height(50.0);
+            ui.set_max_width(text_w);
             let title = if view.has_track {
                 RichText::new(view.title)
                     .font(theme::bold(14.0))

@@ -28,6 +28,13 @@ const POSITION_TICK: Duration = Duration::from_millis(250);
 /// How long a status line stays visible.
 const STATUS_TTL: Duration = Duration::from_secs(6);
 
+/// Visualizer cadence while bars are moving (~30 Hz).
+const SPECTRUM_TICK: Duration = Duration::from_millis(33);
+/// Time constants of the bar easing, in seconds: bars rise almost at
+/// once and fall over a few hundred milliseconds.
+const SPECTRUM_ATTACK: f32 = 0.035;
+const SPECTRUM_RELEASE: f32 = 0.16;
+
 /// Pressing Previous inside the first seconds goes to the previous track;
 /// later it restarts the current one.
 const PREV_RESTART_THRESHOLD_MS: u64 = 3_000;
@@ -62,6 +69,11 @@ pub struct QuickPlayApp {
     /// Where the playlist window was first placed (beside the player).
     playlist_pos: Option<Pos2>,
     window_mode_applied: bool,
+    /// Smoothed bar heights shown by the visualizer.
+    spectrum: Vec<f32>,
+    /// The last frame taken, which the bars ease toward.
+    spectrum_target: Vec<f32>,
+    spectrum_tick: Instant,
 }
 
 impl QuickPlayApp {
@@ -89,6 +101,9 @@ impl QuickPlayApp {
             fail_streak: 0,
             playlist_pos: None,
             window_mode_applied: false,
+            spectrum: vec![0.0; crate::audio::spectrum::BAND_COUNT],
+            spectrum_target: vec![0.0; crate::audio::spectrum::BAND_COUNT],
+            spectrum_tick: Instant::now(),
             settings,
         };
         if !files.is_empty() {
@@ -106,6 +121,10 @@ impl QuickPlayApp {
             match AudioEngine::new(notify) {
                 Ok(engine) => {
                     engine.send(AudioCmd::SetVolume(self.settings.volume));
+                    engine.shared().spectrum_enabled.store(
+                        self.settings.show_spectrum,
+                        std::sync::atomic::Ordering::Relaxed,
+                    );
                     tracing::info!(device = ?engine.device_name(), "audio engine started");
                     self.engine = Some(engine);
                 }
@@ -423,6 +442,48 @@ impl QuickPlayApp {
         }
     }
 
+    /// Pull the spectrum frame due at the output position and ease the bars
+    /// toward it: instant attack, exponential release. Returns whether any
+    /// bar is still moving, so the loop knows to keep repainting.
+    fn advance_spectrum(&mut self) -> bool {
+        if !self.settings.show_spectrum {
+            return false;
+        }
+        let now = Instant::now();
+        let dt = now
+            .duration_since(self.spectrum_tick)
+            .as_secs_f32()
+            .clamp(0.0, 0.1);
+        self.spectrum_tick = now;
+        // A new frame replaces the target; otherwise the last one holds, so a
+        // tick that lands between two frames does not dip the bars.
+        match (&self.engine, self.state) {
+            (Some(engine), PlayerState::Playing) => {
+                if let Some(frame) = engine.shared().take_due_spectrum() {
+                    self.spectrum_target.copy_from_slice(&frame);
+                }
+            }
+            _ => self.spectrum_target.iter_mut().for_each(|t| *t = 0.0),
+        }
+        let attack = 1.0 - (-dt / SPECTRUM_ATTACK).exp();
+        let release = 1.0 - (-dt / SPECTRUM_RELEASE).exp();
+        let mut moving = false;
+        for (bar, &goal) in self.spectrum.iter_mut().zip(&self.spectrum_target) {
+            let k = if goal > *bar { attack } else { release };
+            let next = *bar + (goal - *bar) * k;
+            let next = if next < 0.003 && goal == 0.0 {
+                0.0
+            } else {
+                next
+            };
+            if (next - *bar).abs() > 0.0005 {
+                moving = true;
+            }
+            *bar = next;
+        }
+        moving || self.state == PlayerState::Playing
+    }
+
     fn shortcut_snapshot(&self) -> ShortcutSnapshot {
         ShortcutSnapshot {
             volume: self.settings.volume,
@@ -532,6 +593,19 @@ impl QuickPlayApp {
             Action::SetVolume(v) => self.set_volume(v),
             Action::ToggleExpanded => self.toggle_expanded(&ctx),
             Action::TogglePlaylist => self.toggle_playlist(&ctx),
+            Action::ToggleSpectrum => {
+                self.settings.show_spectrum = !self.settings.show_spectrum;
+                if let Some(engine) = &self.engine {
+                    engine.shared().spectrum_enabled.store(
+                        self.settings.show_spectrum,
+                        std::sync::atomic::Ordering::Relaxed,
+                    );
+                    engine.shared().clear_spectrum();
+                }
+                self.spectrum.iter_mut().for_each(|b| *b = 0.0);
+                self.spectrum_target.iter_mut().for_each(|b| *b = 0.0);
+                self.settings.save();
+            }
             Action::TogglePin => {
                 self.settings.always_on_top = !self.settings.always_on_top;
                 self.apply_window_mode(&ctx, false);
@@ -610,6 +684,10 @@ impl QuickPlayApp {
             volume: self.settings.volume,
             expanded: self.settings.expanded,
             playlist_open: self.settings.show_playlist,
+            spectrum: self
+                .settings
+                .show_spectrum
+                .then_some(self.spectrum.as_slice()),
             always_on_top: self.settings.always_on_top,
             has_track: current.is_some(),
             has_prev: self.queue.prev_index().is_some(),
@@ -692,8 +770,15 @@ impl eframe::App for QuickPlayApp {
         {
             self.status = None;
         }
+        let animating = self.advance_spectrum();
         if self.state == PlayerState::Playing {
-            ctx.request_repaint_after(POSITION_TICK);
+            ctx.request_repaint_after(if animating {
+                SPECTRUM_TICK
+            } else {
+                POSITION_TICK
+            });
+        } else if animating {
+            ctx.request_repaint_after(SPECTRUM_TICK);
         }
     }
 
@@ -797,6 +882,9 @@ fn collect_shortcuts(ctx: &egui::Context, snap: ShortcutSnapshot, out: &mut Vec<
         }
         if i.consume_key(Modifiers::NONE, Key::L) {
             out.push(Action::TogglePlaylist);
+        }
+        if i.consume_key(Modifiers::NONE, Key::S) {
+            out.push(Action::ToggleSpectrum);
         }
         if i.consume_key(Modifiers::NONE, Key::A) {
             out.push(Action::ToggleExpanded);

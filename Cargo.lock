@@ -4920,6 +4920,7 @@ dependencies = [
  "egui",
  "image",
  "lofty",
+ "realfft",
  "rfd",
  "rtrb",
  "rubato",

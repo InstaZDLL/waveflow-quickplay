@@ -351,3 +351,46 @@ pub fn resize_edges(ui: &mut Ui, allow_vertical: bool) {
         }
     }
 }
+
+/// The bar visualizer: `bands` in 0..1, drawn as LED-style stacks in the
+/// accent colour, dim where unlit. Click toggles it.
+pub fn spectrum_bars(ui: &mut Ui, rect: Rect, bands: &[f32]) -> Response {
+    let response = ui.interact(rect, ui.id().with("spectrum"), Sense::click());
+    if !ui.is_rect_visible(rect) || bands.is_empty() {
+        return response;
+    }
+    let painter = ui.painter();
+    let gap = 1.5;
+    let n = bands.len() as f32;
+    let bar_w = ((rect.width() - gap * (n - 1.0)) / n).max(1.0);
+    // Continuous bars: a dim track for the full height, the lit part on
+    // top, brighter the higher it reaches. Sub-pixel heights keep the
+    // motion smooth rather than stepped.
+    let track = Color32::from_rgb(0x22, 0x22, 0x22);
+    for (i, &v) in bands.iter().enumerate() {
+        let x = rect.left() + i as f32 * (bar_w + gap);
+        let full = Rect::from_min_max(pos2(x, rect.top()), pos2(x + bar_w, rect.bottom()));
+        painter.rect_filled(full, 1.0, track);
+        let v = v.clamp(0.0, 1.0);
+        if v <= 0.0 {
+            continue;
+        }
+        let h = (rect.height() * v).max(1.5);
+        let lit = Rect::from_min_max(pos2(x, rect.bottom() - h), pos2(x + bar_w, rect.bottom()));
+        painter.rect_filled(
+            lit,
+            1.0,
+            lerp_color(theme::ACCENT_DIM, theme::ACCENT_HOVER, v),
+        );
+    }
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+    }
+    response.on_hover_text("Spectrum (S)")
+}
+
+fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
+    let t = t.clamp(0.0, 1.0);
+    let mix = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
+    Color32::from_rgb(mix(a.r(), b.r()), mix(a.g(), b.g()), mix(a.b(), b.b()))
+}

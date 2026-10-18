@@ -28,6 +28,7 @@
 pub mod decoder;
 pub mod engine;
 pub mod output;
+pub mod spectrum;
 pub mod state;
 pub mod stream;
 
