@@ -122,7 +122,7 @@ jobs:
             "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name
           } | Set-Content target/packager/SHA256SUMS-windows.txt -Encoding ascii
           Get-Content target/packager/SHA256SUMS-windows.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: windows
           path: |
@@ -155,7 +155,7 @@ jobs:
           cd target/packager
           sha256sum *.deb *.AppImage > SHA256SUMS-linux.txt
           cat SHA256SUMS-linux.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: linux
           path: |
@@ -175,7 +175,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
