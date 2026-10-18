@@ -60,16 +60,16 @@ fn main() -> eframe::Result {
         return Ok(());
     }
     if args.iter().any(|a| a == "--help" || a == "-h") {
+        println!("usage: waveflow-quickplay [--enqueue] [FILE|FOLDER]...");
+        println!();
+        println!("A second launch hands its files to the running player and exits.");
+        println!("  --enqueue      append to its queue instead of replacing it");
         println!(
-            "usage: waveflow-quickplay [--enqueue] [FILE|FOLDER]...
-\n             
-\n             A second launch hands its files to the running player and exits.
-\n             --enqueue      append to its queue instead of replacing it
-\n             --register     add \"{}\" / \"{}\" to the file manager (current user)
-\n             --unregister   remove them",
+            "  --register     add \"{}\" / \"{}\" to the file manager (current user)",
             integration::PLAY_LABEL,
             integration::ENQUEUE_LABEL
         );
+        println!("  --unregister   remove them");
         return Ok(());
     }
     for (flag, run) in [
