@@ -1,0 +1,116 @@
+# Builds the installers for a version tag (`v1.0.0`) and publishes them as a
+# GitHub release: a per-user NSIS installer for Windows, a .deb and an
+# AppImage for Linux, with SHA-256 checksums and the notes from
+# docs/releases/<tag>.md. Nothing is built unless the tag matches Cargo.toml
+# and the tests pass.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    name: Tag matches Cargo.toml
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - run: |
+          version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match version $version"
+            exit 1
+          fi
+          test -f "docs/releases/$GITHUB_REF_NAME.md" || { echo "::error::docs/releases/$GITHUB_REF_NAME.md is missing"; exit 1; }
+
+  windows:
+    name: Windows installer
+    needs: version
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - run: rustup show active-toolchain
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - run: cargo test --locked
+      - run: cargo install cargo-packager --locked
+      - run: cargo packager --release --formats nsis
+      - name: Checksums
+        shell: pwsh
+        run: |
+          Get-ChildItem target/packager/*.exe | ForEach-Object {
+            "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name
+          } | Set-Content target/packager/SHA256SUMS-windows.txt -Encoding ascii
+          Get-Content target/packager/SHA256SUMS-windows.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            target/packager/*.exe
+            target/packager/SHA256SUMS-windows.txt
+          if-no-files-found: error
+
+  linux:
+    name: Linux packages
+    needs: version
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    env:
+      # linuxdeploy and appimagetool are AppImages themselves; no FUSE on runners.
+      APPIMAGE_EXTRACT_AND_RUN: "1"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake libasound2-dev libxkbcommon-dev libwayland-dev libfuse2 file
+      - run: rustup show active-toolchain
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - run: cargo test --locked
+      - run: cargo install cargo-packager --locked
+      - run: cargo packager --release --formats deb,appimage
+      - name: Checksums
+        run: |
+          cd target/packager
+          sha256sum *.deb *.AppImage > SHA256SUMS-linux.txt
+          cat SHA256SUMS-linux.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: |
+            target/packager/*.deb
+            target/packager/*.AppImage
+            target/packager/SHA256SUMS-linux.txt
+          if-no-files-found: error
+
+  publish:
+    name: GitHub release
+    needs: [windows, linux]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - run: ls -la dist
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          name: WaveFlow QuickPlay ${{ github.ref_name }}
+          body_path: docs/releases/${{ github.ref_name }}.md
+          files: dist/*
+          generate_release_notes: false

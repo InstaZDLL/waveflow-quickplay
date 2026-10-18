@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.1.0-10b981?style=flat-square" alt="Version 0.1.0" />
+  <img src="https://img.shields.io/badge/version-1.0.0-10b981?style=flat-square" alt="Version 1.0.0" />
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey?style=flat-square" alt="Windows and Linux" />
   <img src="https://img.shields.io/badge/rust-1.98-orange?style=flat-square&logo=rust" alt="Rust 1.98" />
   <img src="https://img.shields.io/badge/UI-egui%20%2F%20eframe%200.36-2563eb?style=flat-square" alt="egui / eframe 0.36" />
@@ -121,7 +121,12 @@
 
 ## Install
 
-QuickPlay is built from source for now (see [Build and test](#build-and-test)); the binary is a single file you can copy anywhere.
+Grab the package for your system from the [latest release](https://github.com/InstaZDLL/waveflow-quickplay/releases/latest):
+
+- **Windows**: `waveflow-quickplay_<version>_x64-setup.exe`, a per-user installer (no administrator rights) that also registers the context-menu entries and removes them on uninstall.
+- **Linux**: a `.deb` for Debian / Ubuntu or an `.AppImage` for any distribution, both with the desktop entry and the audio MIME types.
+
+Or build it yourself (see [Build and test](#build-and-test)): the binary is a single file you can copy anywhere.
 
 ```text
 waveflow-quickplay "C:\Music\song.flac"
@@ -132,7 +137,7 @@ waveflow-quickplay --register                 # file-manager integration, curren
 waveflow-quickplay --unregister
 ```
 
-Move the binary, run `--register` again from its new place: the registry entries and the `.desktop` file point at the executable's path.
+`--register` is what the Windows installer runs for you; a hand-copied binary needs it once, and again if it moves, since the registry entries and the `.desktop` file point at the executable's path.
 
 ## Keyboard
 
@@ -153,10 +158,12 @@ Shortcuts work whichever of the two windows has focus.
 
 ## Build and test
 
-Requirements: the WaveFlow repository checked out next to this folder
-(`../WaveFlow`), Rust 1.98 (pinned by `rust-toolchain.toml`) and cmake (for
+Requirements: Rust 1.98 (pinned by `rust-toolchain.toml`) and cmake (for
 the vendored libopus that `waveflow-core` builds, as the desktop app does).
-On Linux add the GTK 3 and ALSA development packages (file dialog, audio).
+`waveflow-core` is fetched from the WaveFlow commit pinned in `Cargo.toml`; to
+build against a local checkout instead, pass
+`--config 'patch."https://github.com/InstaZDLL/WaveFlow".waveflow-core.path="../WaveFlow/src-tauri/crates/core"'`.
+On Linux add the ALSA, xkbcommon and Wayland development packages.
 
 ```bash
 cargo run --release -- <files or folders>
@@ -165,7 +172,17 @@ cargo build --release          # → target/release/waveflow-quickplay(.exe)
 cargo fmt --check
 cargo clippy --all-targets
 cargo test                     # 24 tests
+
+cargo install cargo-packager
+cargo packager --release --formats nsis          # Windows: per-user installer
+cargo packager --release --formats deb,appimage  # Linux
 ```
+
+The installers come out in `target/packager/`. The NSIS template in
+`packaging/installer.nsi` is cargo-packager's with the `--register` /
+`--unregister` steps added; `packaging/quickplay.desktop` is the Linux
+desktop entry. Releases are built by `.github/workflows/release.yml` from a
+`v*` tag whose notes live in `docs/releases/`.
 
 ## Architecture
 
@@ -187,7 +204,7 @@ waveflow-quickplay
    ├── src/ipc.rs         single instance: local socket, play / enqueue hand-over
    ├── src/integration.rs --register / --unregister (registry verbs, .desktop file)
    ├── src/platform.rs    Windows: owner link between the playlist window and the player
-   └── src/ui/            theme, painted icons, widgets, player pane, playlist window
+   ├── src/ui/            theme, painted icons, widgets, player pane, playlist window
 ```
 
 ### Playback pipeline
@@ -289,9 +306,6 @@ The working set is dominated by the OpenGL driver and the decoded cover
 - **Fonts**: Inter and Noto Sans CJK are embedded; a system face is
   appended as a last fallback for anything else. The CJK file is 16 MB of
   the binary.
-- The `[patch.crates-io] glib` RUSTSEC backport of the WaveFlow workspace
-  does not apply here (patches must sit at the workspace root); only Linux
-  builds pull glib, through rfd's GTK dialog.
 - One copy of the pipeline per application. If the prototype is adopted,
   the next step is a Tauri-free `waveflow-audio` crate with an event-sink
   trait, which both the desktop engine and QuickPlay would consume.

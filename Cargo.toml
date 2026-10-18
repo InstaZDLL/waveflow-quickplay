@@ -1,6 +1,6 @@
 [package]
 name = "waveflow-quickplay"
-version = "0.1.0"
+version = "1.0.0"
 description = "WaveFlow QuickPlay — a standalone, lightweight egui/eframe audio player built on WaveFlow's Rust audio infrastructure."
 authors = ["InstaZDLL <github.105mh@8shield.net>"]
 edition = "2021"
@@ -24,7 +24,11 @@ publish = false
 # on, which builds the vendored libopus and therefore needs cmake — the same
 # requirement the desktop app already has. `sqlite` / `plugins` are left
 # off: no database, no plugin host in QuickPlay.
-waveflow-core = { path = "../WaveFlow/src-tauri/crates/core" }
+# Pinned to a WaveFlow commit so the build is reproducible without a checkout
+# next door; bump the `rev` to pick up core changes. For local work against
+# a WaveFlow checkout, override it from the command line:
+#   cargo build --config 'patch."https://github.com/InstaZDLL/WaveFlow".waveflow-core.path="../WaveFlow/src-tauri/crates/core"'
+waveflow-core = { git = "https://github.com/InstaZDLL/WaveFlow", rev = "75bd2b6918ef35821def921e209d483388f27d30" }
 
 # ── UI ──────────────────────────────────────────────────────────────────
 # glow (OpenGL) rather than wgpu: a smaller dependency tree, a faster cold
@@ -75,9 +79,11 @@ image = { version = "0.25", default-features = false, features = [
 ] }
 
 # ── Desktop glue ────────────────────────────────────────────────────────
-# Same pin + features as the desktop app so the two resolve to one copy.
+# The XDG portal backend on Linux (the desktop's own dialog, no GTK linked,
+# Flatpak-friendly); the common-controls dialog on Windows.
 rfd = { version = "0.17", default-features = false, features = [
-    "gtk3",
+    "xdg-portal",
+    "wayland",
     "common-controls-v6",
 ] }
 dirs = "7"
@@ -119,3 +125,32 @@ lto = "thin"
 codegen-units = 1
 strip = "symbols"
 panic = "unwind"
+
+# ── Installers (cargo-packager) ─────────────────────────────────────────
+# `cargo packager --release --formats nsis` on Windows, `--formats deb,appimage`
+# on Linux. The NSIS installer is per user, no administrator rights, and runs
+# `--register` / `--unregister` (packaging/installer.nsi); the Linux packages
+# carry the desktop entry with the audio MIME types (packaging/quickplay.desktop).
+[package.metadata.packager]
+product-name = "WaveFlow QuickPlay"
+identifier = "app.waveflow.quickplay"
+publisher = "InstaZDLL"
+category = "Music"
+icons = ["assets/icon.ico", "assets/icon-128.png"]
+out-dir = "target/packager"
+before-packaging-command = "cargo build --release"
+binaries = [{ path = "waveflow-quickplay", main = true }]
+license-file = "LICENSE"
+resources = [{ src = "LICENSE", target = "LICENSE.txt" }]
+
+[package.metadata.packager.nsis]
+template = "packaging/installer.nsi"
+installer-icon = "assets/icon.ico"
+installer-mode = "currentUser"
+languages = ["English", "French"]
+display-language-selector = false
+
+[package.metadata.packager.deb]
+desktop-template = "packaging/quickplay.desktop"
+depends = ["libasound2 | libasound2t64", "libxkbcommon0", "libwayland-client0", "libgl1"]
+section = "sound"
