@@ -1,3 +1,5 @@
 /target
 /.claude
 *.json.tmp
+# Stray captures from local test scripts; real screenshots live in docs/screenshots.
+/*.png
