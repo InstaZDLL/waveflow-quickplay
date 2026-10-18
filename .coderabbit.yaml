@@ -1,0 +1,135 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: fr-FR
+tone_instructions: >-
+  Sois direct et concis. Priorise les bugs réels, les régressions
+  utilisateur, les problèmes de sécurité, les erreurs de logique et les
+  oublis de tests/validation. Évite les remarques purement cosmétiques et
+  tout ce que `cargo fmt` et `clippy -D warnings` couvrent déjà (la CI les
+  exécute).
+early_access: true
+reviews:
+  profile: assertive
+  request_changes_workflow: true
+  high_level_summary: true
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - main
+    ignore_title_keywords:
+      - "chore: bump"
+      - "dependabot"
+      - "[bot]"
+  path_filters:
+    - "!**/target/**"
+    - "!Cargo.lock"
+    - "!*.lock"
+    - "!assets/fonts/**"
+    - "!docs/screenshots/**"
+    # Une langue par fichier, relue par des locuteurs natifs, pas ici : une
+    # chaîne nouvelle touche les huit fichiers d'un coup.
+    - "!src/i18n/*.rs"
+  path_instructions:
+    - path: "src/audio/**"
+      instructions: >-
+        Pipeline audio temps réel de QuickPlay (thread décodeur → ring SPSC
+        rtrb → callback cpal), copie réduite de la topologie du moteur
+        desktop. Dans le callback cpal, signale toute allocation, lock,
+        I/O, log ou opération bloquante. Vérifie les atomics partagés
+        (position, état, volume, `drain_silent`, `paused_output` : le drain
+        se teste avant la pause), la gestion des générations d'événements
+        (un événement d'état ne compte qu'après le `Loaded` de la piste en
+        cours), le flush du resampler en fin de piste et son reset au seek,
+        les formats d'échantillons cpal et le mono → multicanal. Pas d'EQ,
+        crossfade, gapless, ReplayGain, sélection de périphérique ni mode
+        exclusif : c'est hors périmètre par conception, signale-le si une PR
+        en ajoute.
+    - path: "src/ipc.rs"
+      instructions: >-
+        Socket d'instance unique (named pipe Windows, fichier socket dans le
+        répertoire runtime privé de l'utilisateur sur Unix, namespace
+        abstrait Linux seulement en dernier recours). Vérifie que le socket
+        ne finit jamais dans un répertoire partagé (/tmp), les bornes du
+        protocole (taille et nombre de chemins), la gestion des connexions
+        lentes ou malveillantes sur le thread par connexion, et le
+        remplacement d'un fichier socket périmé seulement après un essai de
+        connexion.
+    - path: "src/integration.rs"
+      instructions: >-
+        Enregistrement dans le gestionnaire de fichiers : registre
+        `HKCU\Software\Classes` via un `.reg` importé par `reg.exe` (lancé
+        sans fenêtre console), fichier `.desktop` + icône sous
+        `~/.local/share`. Vérifie l'échappement des chemins (guillemets,
+        antislashs, caractères non ASCII, UTF-16LE + BOM pour reg.exe),
+        l'idempotence des deux sens, que rien n'écrit hors du profil
+        utilisateur ni ne touche le gestionnaire par défaut, et que la
+        réécriture des libellés au changement de langue ne cible que
+        l'exécutable réellement enregistré.
+    - path: "src/app.rs"
+      instructions: >-
+        État de l'application et application des `Action` de l'UI après la
+        frame. Vérifie les cas multi-fenêtres (liste de lecture ancrée :
+        offset, réduction/restauration, lien de propriété Windows, chemin
+        macOS qui déduit l'état réduit du rect de la fenêtre et renvoie
+        `Minimized(false)` au root), les générations d'événements du moteur,
+        et que les opérations longues (scan de dossiers, lectures de tags,
+        `reg import`) restent hors du thread UI.
+    - path: "src/ui/**"
+      instructions: >-
+        Interface egui/eframe : barre de titre personnalisée, widgets
+        peints, marquee, page Réglages. Vérifie les contraintes de la barre
+        compacte (420 × 154 points : rien ne doit déborder ni exiger de
+        défilement en anglais), l'ordre interaction/peinture des boutons
+        sur la zone de drag, les `Id` stables, les repaints demandés
+        seulement quand nécessaire (animation uniquement en lecture).
+        Toute chaîne visible doit venir de `Strings` (`src/i18n`), jamais
+        d'un littéral.
+    - path: "src/i18n/mod.rs"
+      instructions: >-
+        Table `Strings` et détection de langue. Un champ ajouté doit avoir
+        un commentaire disant où il apparaît et être rempli dans les huit
+        fichiers de langue ; les placeholders nommés (`{n}`, `{t}`, `{e}`,
+        `{v}`, `{l}`) sont vérifiés par un test. Les titres de fenêtre
+        montrés par l'OS restent en anglais : ils servent aussi à retrouver
+        les fenêtres sous Windows.
+    - path: "src/lyrics.rs"
+      instructions: >-
+        Parseur `.lrc` sur fichier non fiable. Vérifie l'arithmétique
+        (checked), les timestamps mal formés, `[offset:]`, les stamps
+        enrichis, et qu'aucune entrée ne peut faire paniquer ou boucler.
+    - path: "src/main.rs"
+      instructions: >-
+        Point d'entrée : options CLI, console parente attachée seulement si
+        aucun handle de sortie n'est hérité, passage de relais à l'instance
+        en cours avec reprise sur la course au démarrage. Vérifie les cas où
+        le socket est tenu sans répondre et qu'un échec de l'IPC laisse
+        l'application démarrer seule.
+    - path: ".github/workflows/**"
+      instructions: >-
+        Workflows CI et release (NSIS signé Authenticode avec un certificat
+        importé depuis un secret, .deb, AppImage). Vérifie les actions
+        épinglées par SHA, les permissions minimales, que rien ne compile
+        après l'import du certificat et qu'il est retiré du magasin en fin
+        de job même en cas d'échec, les risques d'injection via titres de
+        PR ou branches, et la cohérence tag / version / notes.
+    - path: "packaging/**"
+      instructions: >-
+        Template NSIS (celui de cargo-packager plus les étapes `--register`
+        / `--unregister`) et entrée desktop Linux. Vérifie les chemins,
+        les guillemets autour de `$INSTDIR`, l'ordre des étapes à
+        l'installation et à la désinstallation, et la cohérence avec les
+        artefacts publiés.
+    - path: "docs/**"
+      instructions: >-
+        Documentation et notes de version. Vérifie que les affirmations
+        chiffrées correspondent aux mesures du README et que les comportements
+        décrits existent dans le code.
+
+  tools:
+    semgrep:
+      enabled: false
+    opengrep:
+      enabled: true
+
+chat:
+  auto_reply: true
