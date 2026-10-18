@@ -289,6 +289,18 @@ profile, same file, stereo 44.1 kHz output, 2026-10-18:
 | Release binary                           | 33.1 MB | `target/release/waveflow-quickplay`                         |
 | Clean release build                      | 2 min 42 s | 8 cores, cmake + libopus included                        |
 
+macOS 26.6 on an Apple M2 (MacBook Air), same build profile, same file,
+stereo 48 kHz output on the built-in speakers, bare binary launched from a
+shell, 2026-10-18:
+
+| Metric                                   | Value   | How                                                        |
+| ---------------------------------------- | ------- | ---------------------------------------------------------- |
+| Process start → first frame              | 216 ms  | `window ready elapsed_ms=…` (581 ms on the very first launch) |
+| Resident set, playing, compact bar       | 116 MB  | `ps -o rss` (counts shared AppKit/Metal pages too)          |
+| CPU while playing, spectrum shown        | 14.5 %  | `top -l 3 -s 5`, one core = 100 %, Retina 2× window         |
+| Release binary                           | 28.4 MB | `target/release/waveflow-quickplay`                         |
+| Clean release build                      | 1 min 55 s | 8 cores, cmake + libopus included                        |
+
 Verified there: rendering identical to Windows, Opus / AAC / FLAC playback,
 the single-instance hand-over over the Unix socket, `--register` showing up
 in "Open with", and under XWayland the playlist following the player.
@@ -298,8 +310,10 @@ The working set is dominated by the OpenGL driver and the decoded cover
 
 ## Known limitations
 
-- **macOS** is untested, and file associations there need an application
-  bundle; `--register` says so and does nothing.
+- **macOS** runs from the bare binary (checked on macOS 26 / Apple silicon:
+  playback, the docked playlist, minimize and restore from the Dock, the
+  single instance). There is no `.app` bundle or installer yet, and file
+  associations there need one; `--register` says so and does nothing.
 - **Output device**: the OS default, opened at its default configuration
   (shared mode). No device picker, no exclusive mode. If the device goes
   away, the engine is released and the next play reopens the new default.
