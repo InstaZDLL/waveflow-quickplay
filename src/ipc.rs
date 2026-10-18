@@ -118,8 +118,12 @@ impl Server {
         let (name, socket_path) = socket_name()?;
         let listener = match ListenerOptions::new().name(name.clone()).create_sync() {
             Err(e) if e.kind() == io::ErrorKind::AddrInUse && socket_path.is_some() => {
-                // A socket file left by a crashed instance: nobody answered
-                // the connect attempt that preceded us, so it is stale.
+                // Either a file left by a crashed instance, or an instance
+                // that came up between our connect attempt and now. Only a
+                // socket nobody answers is stale; a live one is handed to.
+                if Stream::connect(name.clone()).is_ok() {
+                    return Err(e);
+                }
                 let path = socket_path.as_deref().expect("checked");
                 std::fs::remove_file(path)?;
                 ListenerOptions::new().name(name).create_sync()?

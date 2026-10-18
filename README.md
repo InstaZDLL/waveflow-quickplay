@@ -66,7 +66,7 @@ administrator rights, no installer:
 - **Windows**: two context-menu entries on every audio extension and on
   folders, "Play with WaveFlow QuickPlay" and "Add to WaveFlow QuickPlay
   playlist", plus an "Open with" entry. Keys live under
-  `HKCUSoftwareClasses`; the default handler for the extensions is not
+  `HKCU\Software\Classes`; the default handler for the extensions is not
   changed (Settings › Default apps does that). A multi-selection launches
   one process per file; the single-instance socket merges them.
 - **Linux**: `~/.local/share/applications/app.waveflow.quickplay.desktop`

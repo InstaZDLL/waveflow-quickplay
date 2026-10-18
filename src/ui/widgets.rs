@@ -399,11 +399,17 @@ fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
 /// the space it gets (PotPlayer's title / lyric line). Short text is drawn
 /// as a plain label. Long text holds still for a moment, scrolls left at a
 /// steady pace with a gap before it comes round again, and starts over
-/// whenever the text changes, so every lyric line is read from its start.
-pub fn marquee(ui: &mut Ui, text: RichText, id: &str) -> Response {
+/// whenever `epoch` or the text changes, so every lyric line is read from
+/// its start even when two consecutive lines are identical. With
+/// `scrolling` false (player paused or idle) the start of the text is shown
+/// and nothing animates, so an idle window stays at zero repaints.
+pub fn marquee(ui: &mut Ui, text: RichText, epoch: u64, scrolling: bool) -> Response {
     const HOLD_SECS: f64 = 1.5;
     const SPEED: f64 = 28.0; // points per second
     const GAP: f32 = 48.0;
+    /// Glyphs may overhang the row's logical box (CJK, accents); clip the
+    /// sides only.
+    const VERTICAL_SLACK: f32 = 6.0;
 
     let width = ui.available_width();
     let galley = egui::WidgetText::from(text).into_galley(
@@ -417,28 +423,33 @@ pub fn marquee(ui: &mut Ui, text: RichText, id: &str) -> Response {
     if !ui.is_rect_visible(rect) {
         return response;
     }
-    let painter = ui.painter().with_clip_rect(rect);
+    let key = response.id.with("marquee");
+    let clip = Rect::from_min_max(
+        pos2(rect.left(), rect.top() - VERTICAL_SLACK),
+        pos2(rect.right(), rect.bottom() + VERTICAL_SLACK),
+    );
+    if !scrolling && text_w > width {
+        ui.ctx().data_mut(|d| d.remove::<(u64, f64)>(key));
+        ui.painter()
+            .with_clip_rect(clip)
+            .galley(rect.left_top(), galley, theme::TEXT);
+        return response;
+    }
     if text_w <= width {
-        painter.galley(rect.left_top(), galley, theme::TEXT);
+        // Forget any scroll state so the next long text starts from its hold.
+        ui.ctx().data_mut(|d| d.remove::<(u64, f64)>(key));
+        ui.painter().galley(rect.left_top(), galley, theme::TEXT);
         return response;
     }
 
-    // Phase of the animation, restarted when the text changes.
-    let key = response.id.with(id);
-    let hash = {
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        galley.job.text.hash(&mut h);
-        h.finish()
-    };
+    // Phase of the animation, restarted when the line identity changes.
+    let identity = egui::Id::new((epoch, &*galley.job.text)).value();
     let now = ui.input(|i| i.time);
-    let start = ui.ctx().data_mut(|d| {
-        let (h, t) = d.get_temp::<(u64, f64)>(key).unwrap_or((0, now));
-        if h != hash {
-            d.insert_temp(key, (hash, now));
+    let start = ui.ctx().data_mut(|d| match d.get_temp::<(u64, f64)>(key) {
+        Some((id, t)) if id == identity => t,
+        _ => {
+            d.insert_temp(key, (identity, now));
             now
-        } else {
-            t
         }
     });
     let travel = (text_w + GAP) as f64;
@@ -446,10 +457,17 @@ pub fn marquee(ui: &mut Ui, text: RichText, id: &str) -> Response {
     let phase = (now - start) % period;
     let offset = ((phase - HOLD_SECS).max(0.0) * SPEED) as f32;
 
+    let painter = ui.painter().with_clip_rect(clip);
     let origin = pos2(rect.left() - offset, rect.top());
     painter.galley(origin, galley.clone(), theme::TEXT);
     painter.galley(origin + vec2(text_w + GAP, 0.0), galley, theme::TEXT);
-    ui.ctx()
-        .request_repaint_after(std::time::Duration::from_millis(16));
+    // Nothing moves during the hold: wake up when it ends, not every frame.
+    let wait = if phase < HOLD_SECS {
+        std::time::Duration::from_secs_f64(HOLD_SECS - phase)
+    } else {
+        // 30 Hz is plenty at 28 pt/s and matches the spectrum tick.
+        std::time::Duration::from_millis(33)
+    };
+    ui.ctx().request_repaint_after(wait);
     response
 }

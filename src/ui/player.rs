@@ -72,7 +72,12 @@ pub fn controls(ui: &mut Ui, view: &PlayerView<'_>, actions: &mut Vec<Action>) {
                     .font(theme::bold(14.0))
                     .color(theme::TEXT_DIM)
             };
-            marquee(ui, title, "title");
+            marquee(
+                ui,
+                title,
+                view.lyric_epoch,
+                view.state == PlayerState::Playing,
+            );
             let subtitle = if view.has_track {
                 match (view.artist, view.album) {
                     (Some(a), Some(b)) => format!("{a} · {b}"),

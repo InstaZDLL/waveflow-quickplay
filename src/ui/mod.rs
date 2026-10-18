@@ -52,6 +52,9 @@ pub struct PlayerView<'a> {
     pub title: &'a str,
     /// The synced lyric line in force, shown in place of the title.
     pub lyric: Option<&'a str>,
+    /// Start time of that line, so two identical consecutive lines still
+    /// restart the scroll; 0 when the title is shown.
+    pub lyric_epoch: u64,
     pub artist: Option<&'a str>,
     pub album: Option<&'a str>,
     /// `AAC`, `256 kbps`, `48.0 kHz`, `16-bit` — whatever is known.

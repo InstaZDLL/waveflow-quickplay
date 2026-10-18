@@ -92,6 +92,10 @@ pub struct QuickPlayApp {
     /// The playlist's position last frame, and where we last sent it.
     playlist_last_pos: Option<Pos2>,
     playlist_expected_pos: Option<Pos2>,
+    /// A reopened playlist window goes back to the remembered offset on its
+    /// first frame (distinct from `dock_anchor`, which is also cleared when
+    /// the player is minimized).
+    playlist_place_pending: bool,
     /// Synced lyrics of the current track, from its `.lrc` sidecar.
     lyrics: Option<Lyrics>,
     /// Test-only window capture, armed by `QUICKPLAY_CAPTURE_DIR`.
@@ -148,10 +152,14 @@ impl QuickPlayApp {
             dock_anchor: None,
             playlist_last_pos: None,
             playlist_expected_pos: None,
+            playlist_place_pending: false,
             lyrics: None,
             capture: Capture::from_env(),
             ipc,
-            last_remote_play: None,
+            // Files given on the command line count as the first `play` of a
+            // burst: when Explorer starts one process per selected file, the
+            // ones that hand over to us must join these, not replace them.
+            last_remote_play: (!files.is_empty()).then(Instant::now),
             spectrum: vec![0.0; crate::audio::spectrum::BAND_COUNT],
             spectrum_target: vec![0.0; crate::audio::spectrum::BAND_COUNT],
             spectrum_tick: Instant::now(),
@@ -729,10 +737,11 @@ impl QuickPlayApp {
             .map(|(s, _)| s.as_str());
         let lyric = current
             .and(self.lyrics.as_ref())
-            .and_then(|l| l.line_at(position_ms));
+            .and_then(|l| l.current(position_ms));
         PlayerView {
             title: current.map_or("", |e| e.title()),
-            lyric,
+            lyric: lyric.map(|(_, text)| text),
+            lyric_epoch: lyric.map_or(0, |(at, _)| at),
             artist: current.and_then(|e| e.artist()),
             album: current.and_then(|e| e.album()),
             format_chips,
@@ -878,7 +887,11 @@ impl QuickPlayApp {
             }
         }
         if got_any {
-            ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Minimized(false));
+            // Only un-minimize a window that is minimized: asking winit to
+            // restore a window that has not been shown yet leaves it iconic.
+            if self.root_minimized {
+                ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Minimized(false));
+            }
             ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Focus);
         }
     }
@@ -902,6 +915,7 @@ impl QuickPlayApp {
     /// for a frame, so the next one needs attaching and anchoring afresh.
     fn forget_playlist_window(&mut self) {
         self.playlist_attached = false;
+        self.playlist_place_pending = true;
         self.dock_anchor = None;
         self.playlist_last_pos = None;
         self.playlist_expected_pos = None;
@@ -936,6 +950,17 @@ impl QuickPlayApp {
                 let offset = Vec2::new(DOCK_GAP, 0.0);
                 let target = anchor + offset;
                 self.playlist_offset = Some(offset);
+                if (playlist.min - target).length() > DOCK_TOLERANCE {
+                    ctx.send_viewport_cmd_to(
+                        Self::playlist_viewport_id(),
+                        ViewportCommand::OuterPosition(target),
+                    );
+                    self.playlist_expected_pos = Some(target);
+                }
+            }
+            _ if self.playlist_place_pending => {
+                self.playlist_place_pending = false;
+                let target = anchor + self.playlist_offset.unwrap_or_default();
                 if (playlist.min - target).length() > DOCK_TOLERANCE {
                     ctx.send_viewport_cmd_to(
                         Self::playlist_viewport_id(),

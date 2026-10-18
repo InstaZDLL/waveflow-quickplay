@@ -22,11 +22,12 @@ impl Lyrics {
     /// Reads the `.lrc` next to `audio` (any case of the extension). `None`
     /// when there is no such file or it holds no timed line.
     pub fn load_for(audio: &Path) -> Option<Self> {
-        let stem = audio.file_stem()?;
-        let dir = audio.parent()?;
+        audio.file_stem()?;
+        // `with_extension` on the full path: a stem with dots in it
+        // (`01. Intro.flac`) must become `01. Intro.lrc`, not `01.lrc`.
         let candidate = ["lrc", "LRC", "Lrc"]
             .iter()
-            .map(|ext| dir.join(stem).with_extension(ext))
+            .map(|ext| audio.with_extension(ext))
             .find(|p| p.is_file())?;
         let bytes = match std::fs::read(&candidate) {
             Ok(b) => b,
@@ -87,10 +88,16 @@ impl Lyrics {
 
     /// The line in force at `pos_ms`: the last one that started at or
     /// before it. `None` before the first line or when that line is empty.
+    #[cfg(test)]
     pub fn line_at(&self, pos_ms: u64) -> Option<&str> {
+        self.current(pos_ms).map(|(_, text)| text)
+    }
+
+    /// Same as [`line_at`](Self::line_at), with the line's start time.
+    pub fn current(&self, pos_ms: u64) -> Option<(u64, &str)> {
         let idx = self.lines.partition_point(|l| l.at_ms <= pos_ms);
-        let line = &self.lines.get(idx.checked_sub(1)?)?.text;
-        (!line.is_empty()).then_some(line.as_str())
+        let line = self.lines.get(idx.checked_sub(1)?)?;
+        (!line.text.is_empty()).then_some((line.at_ms, line.text.as_str()))
     }
 
     /// When the displayed line next changes after `pos_ms`, if ever.
@@ -199,6 +206,24 @@ mod tests {
         assert_eq!(l.lines[0].at_ms, 500);
         let l = Lyrics::parse("[offset:-500]\n[00:01.00]a\n").unwrap();
         assert_eq!(l.lines[0].at_ms, 1500);
+    }
+
+    #[test]
+    fn sidecar_next_to_a_dotted_name() {
+        let dir = std::env::temp_dir().join(format!("quickplay-lrc-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let audio = dir.join("01. Intro.flac");
+        std::fs::write(&audio, b"").unwrap();
+        assert!(Lyrics::load_for(&audio).is_none(), "no sidecar yet");
+        std::fs::write(
+            dir.join("01. Intro.lrc"),
+            "[00:01.00]hello
+",
+        )
+        .unwrap();
+        let l = Lyrics::load_for(&audio).expect("sidecar found");
+        assert_eq!(l.line_at(1000), Some("hello"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
