@@ -17,6 +17,7 @@ mod audio;
 mod capture;
 mod config;
 mod library;
+mod lyrics;
 mod platform;
 mod queue;
 mod ui;

@@ -50,6 +50,8 @@ pub enum Action {
 /// Read-only snapshot of what the player pane shows.
 pub struct PlayerView<'a> {
     pub title: &'a str,
+    /// The synced lyric line in force, shown in place of the title.
+    pub lyric: Option<&'a str>,
     pub artist: Option<&'a str>,
     pub album: Option<&'a str>,
     /// `AAC`, `256 kbps`, `48.0 kHz`, `16-bit` — whatever is known.

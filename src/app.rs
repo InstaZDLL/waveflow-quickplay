@@ -14,6 +14,7 @@ use crate::audio::{AudioCmd, AudioEngine, EngineEvent, PlayerState};
 use crate::capture::Capture;
 use crate::config::{Settings, MIN_WIDTH};
 use crate::library::{self, Loader, LoaderEvent};
+use crate::lyrics::Lyrics;
 use crate::queue::Queue;
 use crate::ui::widgets::{self, TitleAction};
 use crate::ui::{
@@ -90,6 +91,8 @@ pub struct QuickPlayApp {
     /// The playlist's position last frame, and where we last sent it.
     playlist_last_pos: Option<Pos2>,
     playlist_expected_pos: Option<Pos2>,
+    /// Synced lyrics of the current track, from its `.lrc` sidecar.
+    lyrics: Option<Lyrics>,
     /// Test-only window capture, armed by `QUICKPLAY_CAPTURE_DIR`.
     capture: Option<Capture>,
     /// Smoothed bar heights shown by the visualizer.
@@ -130,6 +133,7 @@ impl QuickPlayApp {
             dock_anchor: None,
             playlist_last_pos: None,
             playlist_expected_pos: None,
+            lyrics: None,
             capture: Capture::from_env(),
             spectrum: vec![0.0; crate::audio::spectrum::BAND_COUNT],
             spectrum_target: vec![0.0; crate::audio::spectrum::BAND_COUNT],
@@ -214,6 +218,7 @@ impl QuickPlayApp {
         self.codec = None;
         self.seek_preview = None;
         self.state = PlayerState::Loading;
+        self.lyrics = Lyrics::load_for(&path);
         let generation = self.generation;
         self.send(AudioCmd::Load {
             generation,
@@ -705,8 +710,12 @@ impl QuickPlayApp {
             .as_ref()
             .filter(|(_, at)| at.elapsed() < STATUS_TTL)
             .map(|(s, _)| s.as_str());
+        let lyric = current
+            .and(self.lyrics.as_ref())
+            .and_then(|l| l.line_at(position_ms));
         PlayerView {
             title: current.map_or("", |e| e.title()),
+            lyric,
             artist: current.and_then(|e| e.artist()),
             album: current.and_then(|e| e.album()),
             format_chips,
@@ -825,6 +834,21 @@ impl QuickPlayApp {
         }
     }
 
+    /// Wakes the UI exactly when the lyric line changes, instead of letting
+    /// it lag by up to a position tick.
+    fn schedule_lyric_repaint(&self, ctx: &egui::Context) {
+        if self.state != PlayerState::Playing {
+            return;
+        }
+        let (Some(lyrics), Some(engine)) = (self.lyrics.as_ref(), self.engine.as_ref()) else {
+            return;
+        };
+        let pos = engine.shared().position_ms();
+        if let Some(next) = lyrics.next_change_after(pos) {
+            ctx.request_repaint_after(Duration::from_millis(next.saturating_sub(pos) + 5));
+        }
+    }
+
     /// Forgets the playlist window: egui destroys it when it is not shown
     /// for a frame, so the next one needs attaching and anchoring afresh.
     fn forget_playlist_window(&mut self) {
@@ -912,6 +936,7 @@ impl eframe::App for QuickPlayApp {
             self.status = None;
         }
         let animating = self.advance_spectrum();
+        self.schedule_lyric_repaint(ctx);
         if self.state == PlayerState::Playing {
             ctx.request_repaint_after(if animating {
                 SPECTRUM_TICK

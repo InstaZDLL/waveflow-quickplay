@@ -64,7 +64,7 @@ pub fn controls(ui: &mut Ui, view: &PlayerView<'_>, actions: &mut Vec<Action>) {
             ui.set_height(50.0);
             ui.set_max_width(text_w);
             let title = if view.has_track {
-                RichText::new(view.title)
+                RichText::new(view.lyric.unwrap_or(view.title))
                     .font(theme::bold(14.0))
                     .color(theme::TEXT)
             } else {

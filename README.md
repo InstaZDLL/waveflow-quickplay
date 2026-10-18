@@ -52,6 +52,14 @@ app.
 Files and folders can be dropped on either window; double-click a playlist
 row to play it; right-click for Play / Remove.
 
+### Lyrics
+
+A `song.lrc` next to `song.flac` is read when the track starts and its
+timed lines replace the title in the controls block as the song plays (the
+window title keeps the track name). An empty timed line, or the gap before
+the first one, shows the title again. `[offset:]` and enhanced-LRC word
+stamps are honoured; nothing is fetched from the network.
+
 ## Architecture
 
 ```text
@@ -66,6 +74,7 @@ waveflow-quickplay
    ├── src/app.rs         QuickPlayApp: queue + engine + loader + window state, applies UI actions
    ├── src/audio/         the playback pipeline (see below)
    ├── src/library.rs     tags / duration / cover reads on two worker threads
+   ├── src/lyrics.rs      .lrc sidecar parser, line in force at a position
    ├── src/platform.rs    Windows: owner link between the playlist window and the player
    ├── src/queue.rs       the playlist model
    ├── src/config.rs      settings.json
