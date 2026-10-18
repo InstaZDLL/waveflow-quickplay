@@ -1,0 +1,155 @@
+# Architecture
+
+How QuickPlay is put together, for anyone who wants to change it. The
+README has the short version; this is the long one.
+
+## Crates and modules
+
+```text
+WaveFlow/src-tauri/crates/core   (waveflow-core, git dependency pinned to a WaveFlow commit)
+   ├── audio_format::opus::codecs()   the one codec registry (symphonia + libopus)
+   ├── audio_format::dsd              DSF / DFF parser, 1-bit → PCM converter, tags
+   └── scanner::extract               AUDIO_EXTENSIONS, is_scannable_audio,
+                                      read_tagged_file, probe_playable_stream, file_type_label
+
+waveflow-quickplay
+   ├── src/main.rs        CLI, single-instance hand-over, logging, eframe window
+   ├── src/app.rs         QuickPlayApp: queue + engine + loader + window state, applies UI actions
+   ├── src/audio/         the playback pipeline (see below)
+   ├── src/library.rs     tags / duration / cover reads and folder scans on worker threads
+   ├── src/lyrics.rs      .lrc sidecar parser, line in force at a position
+   ├── src/queue.rs       the playlist model
+   ├── src/config.rs      settings.json
+   ├── src/i18n/          one strings table per language, system-language detection
+   ├── src/ipc.rs         single instance: local socket, play / enqueue hand-over
+   ├── src/integration.rs --register / --unregister (registry verbs, .desktop file)
+   ├── src/platform.rs    Windows: owner link between the playlist window and the player
+   ├── src/ui/            theme, painted icons, widgets, player pane, playlist window, settings page
+   └── packaging/         NSIS template and Linux desktop entry for cargo-packager
+```
+
+The UI never touches the engine or the queue directly: every pane reads a
+view of the state and pushes an `Action`; the app applies the actions after
+the frame. That is what keeps the widgets free of borrows and the audio
+thread free of UI concerns.
+
+## Why QuickPlay has its own pipeline
+
+The desktop engine (`crates/app/src/audio/`, about 10 000 lines across
+`engine.rs`, `decoder.rs`, `output.rs`) is built from a `tauri::AppHandle`:
+every state change is a Tauri event, the analytics task runs on
+`tauri::async_runtime` and writes `play_event` rows through the profile
+pool, and ReplayGain / crossfade / the output pin / exclusive mode are read
+from the profile database. It cannot be instantiated without a Tauri
+runtime, which QuickPlay must not start.
+
+QuickPlay therefore carries a reduced pipeline (`src/audio/`, about 700
+lines) with the desktop's topology and invariants, on top of the desktop's
+own decoders, DSD converter and probing code from `waveflow-core`. "Powered
+by WaveFlow" is the honest description: same formats and same decoders,
+its own small transport.
+
+## Playback pipeline
+
+```text
+UI thread (egui)  ──AudioCmd (crossbeam)──►  decoder thread (std)  ──f32 (rtrb SPSC)──►  cpal callback
+                  ◄──EngineEvent + repaint──  symphonia / DSD → convert_channels → rubato
+                  reads SharedPlayback atomics (position, state, volume)
+```
+
+- The cpal callback never allocates, locks or logs; it pops the ring,
+  applies the volume and advances `samples_played`, the only position clock.
+- `drain_silent` (bulk pop + silence) and `paused_output` (silence, no pop)
+  give clean seeks and instant pause, as in the desktop engine; the callback
+  tests the drain first, so a flush requested while paused still empties the
+  ring.
+- Streams open through `waveflow_core::audio_format::opus::codecs()`, so
+  QuickPlay plays exactly the formats the desktop plays, Opus included.
+- The decoder skips a bounded number of undecodable packets per call and
+  resets the codec when symphonia asks for it, so a damaged frame costs a
+  blip, not the track.
+- The resampler is flushed at the end of a track and reset on a seek; mono
+  input is sent to both front channels; every cpal sample format is handled.
+- A track ends only once its tail has left the ring, resampler delay
+  included; the UI then loads the next queue entry. State events are tagged
+  with a generation and ignored until the `Loaded` event of the current
+  track, so a slow previous load cannot flip the state of the new one.
+- The engine is created lazily on the first load, released on exit, and
+  released on an output-stream error so the next play reopens the device.
+- The spectrum analyser (`src/audio/spectrum.rs`, the desktop's FFT and band
+  ladder without the Tauri emit) runs on the decoder thread and timestamps
+  every frame with the output position it belongs to; the UI shows the
+  frame due at the position the callback reports, so the bars follow what
+  is heard.
+
+What is deliberately **not** here: crossfade, gapless, ReplayGain, EQ,
+exclusive output, device selection, radio / remote sources, analytics.
+
+## Windows and docking
+
+The main window has a custom title bar (drag, settings, pin, minimize,
+close) and resize edges: `with_decorations(false)` plus
+`ViewportCommand::StartDrag` / `BeginResize`. Compact mode locks the height
+to the controls block; artwork mode adds the cover above it and makes the
+window freely resizable; the settings page takes the content area in both
+modes.
+
+The playlist is a second native window (`show_viewport_immediate`) docked
+beside the player, as PotPlayer's playlist is:
+
+- it keeps its offset from the player's top-right corner when the player
+  is moved or widened (drag the playlist itself to change that offset);
+- it minimizes and restores with the player (`-` button, taskbar, Win+D or
+  the Dock);
+- it has no taskbar button of its own.
+
+On Windows the playlist is made an *owned* window of the player
+(`src/platform.rs`, the one native call egui does not wrap), which gives the
+pair a single taskbar entry and a shared z-order. On X11 it declares the
+utility window type, which taskbars skip too. Wayland does not let an
+application position its windows, so there the playlist opens where the
+compositor puts it and does not follow the player. Where the backend cannot
+open a second window at all, egui embeds it as a floating panel.
+
+On macOS egui-winit only polls the minimized state at window creation
+(egui#3494), so the app derives it from the presence of the window rect and
+re-sends `Minimized(false)` to the root after a restore from the Dock;
+without that, eframe keeps treating the window as minimized, paints nothing
+and drops the close request.
+
+## Single instance and file-manager integration
+
+A launch first tries to hand its files to a running instance over a local
+socket (`src/ipc.rs`): a named pipe on Windows, a socket file in the
+per-user runtime directory (`$XDG_RUNTIME_DIR`, `$TMPDIR` on macOS) on
+Unix, the Linux abstract namespace only when there is no such directory.
+The protocol is a few UTF-8 lines (`play` or `enqueue`, one path per line,
+a blank line, `ok` back); messages are capped in size and count. Explorer
+starts one process per selected file, so `play` messages arriving within
+half a second of each other are merged into one queue replacement.
+
+`--register` writes, for the current user only, the context-menu verbs and
+an "Open with" entry on Windows (`HKCU\Software\Classes`), or a `.desktop`
+entry with the audio MIME types and an "Add to playlist" action on Linux.
+The labels come from the interface language; the desktop entry carries all
+of them. `--unregister` removes everything. The Windows installer runs both
+at install and uninstall time.
+
+## Languages
+
+Every user-visible string lives in a `Strings` table, one `const` per
+language under `src/i18n/`, with named placeholders (`{n}`, `{t}`, `{e}`,
+`{v}`, `{l}`) filled at use. The language is the stored preference when it
+names one, the system's otherwise, English as the last resort. A test checks
+that every language keeps the placeholders of the English template. Window
+titles the OS shows stay in English: they are also how the two windows find
+each other on Windows.
+
+## Testing from a script
+
+`QUICKPLAY_CAPTURE_DIR=<dir>` (and `QUICKPLAY_CAPTURE_AFTER_MS`) makes the
+app write a PNG of the player window after start, for displays that cannot
+be grabbed from outside such as GNOME on Wayland or an ssh session on
+macOS. `RUST_LOG=debug` turns the log up. The repository's CI runs fmt,
+clippy and the tests on Windows and Ubuntu; releases are built from a `v*`
+tag by `.github/workflows/release.yml`.
