@@ -218,3 +218,4 @@ The working set is dominated by the OpenGL driver and the decoded cover
 | `assets/fonts/Inter-Regular.ttf`, `Inter-SemiBold.ttf` | The Inter Project Authors | https://github.com/rsms/inter | OFL-1.1 (`assets/fonts/OFL-Inter.txt`) |
 | `assets/fonts/NotoSansCJKsc-Regular.otf` | Google, Adobe (Noto CJK) | https://github.com/notofonts/noto-cjk | OFL-1.1 (`assets/fonts/OFL-NotoSansCJK.txt`) |
 | `assets/icon-128.png`, `assets/icon.ico` | WaveFlow | `src-tauri/crates/app/icons/` | GPL-3.0-only (project) |
+| `assets/icon-menu.ico` | WaveFlow | the same glyph on an emerald tile, rendered from `icon-128.png` with ImageMagick for context menus (resource ID 2) | GPL-3.0-only (project) |

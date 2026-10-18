@@ -80,7 +80,9 @@ mod platform {
 
     fn registration_script(exe: &std::path::Path) -> String {
         let exe = exe.to_string_lossy();
-        let icon = format!("\"{exe}\",0");
+        // Icon resource ID 2 (negative index = resource ID): the filled tile
+        // that stays readable on the light menu background.
+        let icon = format!("\"{exe}\",-2");
         let mut s = String::from("Windows Registry Editor Version 5.00\r\n\r\n");
         for (key, label, arg, is_folder) in verb_keys() {
             let full = format!(r"HKEY_CURRENT_USER\Software\Classes\{key}");
