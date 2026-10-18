@@ -32,7 +32,7 @@
 
 <p align="center">
   <!-- Inverted on purpose: the dark capsule stands out on GitHub's light theme and the light one on its dark theme. -->
-  <a href="https://waveflow.app"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/branding/part-of-waveflow-light.svg" /><img src="docs/branding/part-of-waveflow-dark.svg" height="56" alt="Part of the WaveFlow ecosystem" /></picture></a>
+  <a href="https://waveflow.app"><picture><source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/InstaZDLL/waveflow-quickplay/main/docs/branding/part-of-waveflow-light.svg" /><img src="https://raw.githubusercontent.com/InstaZDLL/waveflow-quickplay/main/docs/branding/part-of-waveflow-dark.svg" height="56" alt="Part of the WaveFlow ecosystem" /></picture></a>
 </p>
 
 <p align="center">
