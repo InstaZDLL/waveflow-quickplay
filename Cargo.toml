@@ -5,7 +5,7 @@ description = "WaveFlow QuickPlay — a standalone, lightweight egui/eframe audi
 authors = ["InstaZDLL <github.105mh@8shield.net>"]
 edition = "2021"
 license = "GPL-3.0-only"
-repository = "https://github.com/InstaZDLL/WaveFlow"
+repository = "https://github.com/InstaZDLL/waveflow-quickplay"
 homepage = "https://waveflow.app"
 publish = false
 
