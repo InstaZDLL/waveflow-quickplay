@@ -105,7 +105,10 @@ fn decoder_loop(
             } => {
                 shared.set_state(PlayerState::Loading);
                 // Flush whatever the previous track left in the ring. The
-                // callback only pops when not paused.
+                // callback only pops when not paused, and must already be
+                // silent when the pause lifts, or it would play a buffer of
+                // the old track first.
+                shared.drain_silent.store(true, Ordering::Release);
                 shared.paused_output.store(false, Ordering::Release);
                 drain_ring(producer, shared);
                 let mut stream = match ActiveStream::open(&path) {
@@ -211,8 +214,10 @@ impl Session<'_> {
                     _ => ms,
                 };
                 // The callback does not pop while paused, so lift the pause
-                // for the flush and put it back after.
+                // for the flush and put it back after; silence first, so the
+                // samples drained are never heard.
                 let was_paused = self.shared.paused_output.load(Ordering::Acquire);
+                self.shared.drain_silent.store(true, Ordering::Release);
                 self.shared.paused_output.store(false, Ordering::Release);
                 drain_ring(self.producer, self.shared);
                 self.out.clear();

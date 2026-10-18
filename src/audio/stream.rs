@@ -391,6 +391,16 @@ pub fn convert_channels(input: &[f32], src: usize, dst: usize, out: &mut Vec<f32
                 out.push(0.5 * (input[f * 2] + input[f * 2 + 1]));
             }
         }
+        // Mono into a multichannel device: both front channels, not just
+        // the left one.
+        (1, d) if d > 2 => {
+            out.reserve(frames * d);
+            for &s in input.iter().take(frames) {
+                out.push(s);
+                out.push(s);
+                out.extend(std::iter::repeat_n(0.0, d - 2));
+            }
+        }
         (s, 2) if s >= 3 => {
             out.reserve(frames * 2);
             for f in 0..frames {
@@ -545,9 +555,11 @@ impl Resampler {
         }
     }
 
-    /// Drop frames still queued (after a seek). Costs at most one chunk.
+    /// Drop frames still queued and the filter history (after a seek), so
+    /// nothing from the old position colours the first samples of the new.
     pub fn flush(&mut self) {
-        if let Self::Fft { pending, .. } = self {
+        if let Self::Fft { inner, pending, .. } = self {
+            inner.reset();
             pending.clear();
         }
     }
@@ -556,6 +568,16 @@ impl Resampler {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mono_to_surround_fills_both_fronts() {
+        let mut out = Vec::new();
+        convert_channels(&[0.5, -0.25], 1, 6, &mut out);
+        assert_eq!(
+            out,
+            vec![0.5, 0.5, 0.0, 0.0, 0.0, 0.0, -0.25, -0.25, 0.0, 0.0, 0.0, 0.0]
+        );
+    }
 
     #[test]
     fn mono_to_stereo_duplicates_and_stereo_to_mono_averages() {

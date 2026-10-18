@@ -55,6 +55,14 @@ fn main() -> eframe::Result {
     let started = std::time::Instant::now();
 
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| {
+        matches!(
+            a.as_str(),
+            "--version" | "-V" | "--help" | "-h" | "--register" | "--unregister"
+        )
+    }) {
+        platform::attach_parent_console();
+    }
     if args.iter().any(|a| a == "--version" || a == "-V") {
         println!("waveflow-quickplay {}", env!("CARGO_PKG_VERSION"));
         return Ok(());

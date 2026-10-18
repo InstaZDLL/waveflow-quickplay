@@ -90,3 +90,19 @@ pub fn attach_owned_window(owner_title: &str, owned_title: &str) -> bool {
 pub fn attach_owned_window(_owner_title: &str, _owned_title: &str) -> bool {
     true
 }
+
+/// Release builds use the GUI subsystem on Windows (no console window when
+/// launched from Explorer), which also means `--help` or `--register` run
+/// from a terminal print nothing. Attaching to the parent's console, when
+/// there is one, gets that output back. No-op elsewhere.
+#[cfg(windows)]
+pub fn attach_parent_console() {
+    use windows_sys::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
+    // SAFETY: plain Win32 call; failure (no parent console) is harmless.
+    unsafe {
+        AttachConsole(ATTACH_PARENT_PROCESS);
+    }
+}
+
+#[cfg(not(windows))]
+pub fn attach_parent_console() {}
