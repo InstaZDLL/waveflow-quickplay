@@ -1,0 +1,117 @@
+# Labels every pull request: `scope:` from the touched paths
+# (.github/labeler.yml), `type:` from the Conventional Commits prefix of the
+# title, `size:` from the diff. Same scheme as the WaveFlow repository.
+name: Label PR
+
+on:
+  pull_request:
+    types: [opened, synchronize, edited]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    # A maintainer-provided fine-grained PAT (`LABELER_PAT`, issues: write +
+    # pull_requests: write on this repository) when set, the workflow's own
+    # token otherwise. Empty secrets are falsy in this expression.
+    env:
+      LABEL_TOKEN: ${{ secrets.LABELER_PAT || secrets.GITHUB_TOKEN }}
+
+    steps:
+      - name: Path-based labels
+        uses: actions/labeler@bf12e9b00b37c5c0ca2b87b79b2daf7891dbda13 # v7.0.0
+        with:
+          repo-token: ${{ env.LABEL_TOKEN }}
+          sync-labels: true
+
+      # The title is read inside the github-script JS context, never
+      # interpolated into a shell, so there is no injection path.
+      - name: Type labels
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          github-token: ${{ env.LABEL_TOKEN }}
+          script: |
+            const title = context.payload.pull_request.title;
+            const prefixMap = {
+              'feat': 'type: feat',
+              'fix': 'type: fix',
+              'chore': 'type: chore',
+              'docs': 'type: docs',
+              'refactor': 'type: refactor',
+              'perf': 'type: perf',
+              'test': 'type: test',
+              'ci': 'type: ci',
+            };
+            const match = title.match(/^(\w+)(\(.+\))?[!]?:/);
+            const label = prefixMap[match?.[1]];
+            const current = await github.rest.issues.listLabelsOnIssue({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            for (const l of current.data.filter(l => l.name.startsWith('type:'))) {
+              if (l.name !== label) {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number,
+                  name: l.name,
+                });
+              }
+            }
+            if (label) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                labels: [label],
+              });
+            }
+
+      - name: Size labels
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          github-token: ${{ env.LABEL_TOKEN }}
+          script: |
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+              per_page: 100,
+            });
+            // Lockfile churn is not review effort.
+            const counted = files.filter(f => !f.filename.endsWith('Cargo.lock'));
+            const lines = counted.reduce((sum, f) => sum + f.additions + f.deletions, 0);
+            const sizeLabels = [
+              { max: 10, label: 'size: xs' },
+              { max: 50, label: 'size: s' },
+              { max: 200, label: 'size: m' },
+              { max: 500, label: 'size: l' },
+            ];
+            const sizeLabel = sizeLabels.find(s => lines <= s.max)?.label || 'size: xl';
+            const current = await github.rest.issues.listLabelsOnIssue({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            for (const l of current.data.filter(l => l.name.startsWith('size:'))) {
+              if (l.name !== sizeLabel) {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number,
+                  name: l.name,
+                });
+              }
+            }
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              labels: [sizeLabel],
+            });

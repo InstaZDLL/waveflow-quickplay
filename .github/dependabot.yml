@@ -1,0 +1,50 @@
+version: 2
+
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:10"
+      timezone: "Europe/Zurich"
+    open-pull-requests-limit: 10
+    labels:
+      - dependencies
+      - cargo
+    commit-message:
+      prefix: chore
+    groups:
+      cargo-patch-and-minor:
+        update-types:
+          - minor
+          - patch
+    ignore:
+      # The egui stack moves as one: egui, eframe and egui-winit must stay
+      # on the same minor, and each bump brings API changes that need a
+      # hand-made commit. Patches are fine.
+      - dependency-name: "egui"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      - dependency-name: "eframe"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      # waveflow-core is a git dependency pinned to a WaveFlow commit in
+      # Cargo.toml; it is bumped by hand together with the desktop app.
+      - dependency-name: "waveflow-core"
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:15"
+      timezone: "Europe/Zurich"
+    open-pull-requests-limit: 10
+    labels:
+      - dependencies
+      - github-actions
+    commit-message:
+      prefix: chore
+    groups:
+      github-actions-all:
+        patterns:
+          - "*"

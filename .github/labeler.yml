@@ -1,0 +1,57 @@
+# Path-based labels for actions/labeler (see workflows/label-pr.yml).
+
+"scope: audio":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/audio/**"
+          - "src/library.rs"
+          - "src/lyrics.rs"
+          - "src/queue.rs"
+
+"scope: ui":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/ui/**"
+          - "src/app.rs"
+          - "src/platform.rs"
+          - "src/capture.rs"
+
+"scope: i18n":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/i18n/**"
+
+"scope: integration":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/integration.rs"
+          - "src/ipc.rs"
+          - "src/main.rs"
+
+"scope: packaging":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "packaging/**"
+          - "build.rs"
+          - "assets/**"
+
+"scope: deps":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "Cargo.toml"
+          - "Cargo.lock"
+          - "rust-toolchain.toml"
+
+"scope: ci":
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".github/workflows/**"
+          - ".github/dependabot.yml"
+          - ".github/labeler.yml"
+
+"scope: docs":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "**/*.md"
+          - "docs/**"
+          - ".github/ISSUE_TEMPLATE/**"

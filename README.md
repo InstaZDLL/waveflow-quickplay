@@ -293,6 +293,14 @@ The working set is dominated by the OpenGL driver and the decoded cover
   the next step is a Tauri-free `waveflow-audio` crate with an event-sink
   trait, which both the desktop engine and QuickPlay would consume.
 
+## Contributing
+
+Bug reports and feature requests go through the [issue templates](https://github.com/InstaZDLL/waveflow-quickplay/issues/new/choose);
+security issues through [SECURITY.md](.github/SECURITY.md), never a public
+issue. [CONTRIBUTING.md](CONTRIBUTING.md) has the setup, the checks CI runs,
+how to add a language and what is out of scope by design. Everyone taking
+part agrees to the [Code of Conduct](CODE_OF_CONDUCT.md).
+
 ## Bundled assets
 
 | File | Author | Source | License |

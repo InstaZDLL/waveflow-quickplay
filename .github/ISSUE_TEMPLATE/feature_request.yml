@@ -1,0 +1,54 @@
+name: Feature request
+description: Suggest an improvement to QuickPlay — within its scope of playing the file in front of you.
+title: "feat: <one-line summary>"
+labels: ["enhancement", "needs triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion. QuickPlay is deliberately small: it plays a file, quickly, from the file manager. EQ, crossfade, gapless, ReplayGain, device selection, exclusive output, a library or network sources are **out of scope by design** and live in [WaveFlow Desktop](https://github.com/InstaZDLL/WaveFlow): please request them there. Everything that makes "double-click, listen" faster, more reliable or more pleasant is in scope.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the moment where QuickPlay gets in your way. Skip the solution for now — focus on the why.
+      placeholder: |
+        When I drop a folder of a live recording, the tracks are queued in file-name order, which is not the track order the tags carry.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What would you like to see happen? Sketches, a mock-up of the compact bar, or a command-line flag all welcome.
+      placeholder: |
+        Sort a dropped folder by disc and track number when every file carries them, by name otherwise.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other ways to solve the same problem, and why they are worse than your proposal.
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Rough scope
+      description: How big is this in your head? Helps with triage, not binding.
+      options:
+        - "Small (one control, one flag, one string)"
+        - "Medium (touches the pipeline, the playlist or every language)"
+        - "Large (a new window, a new platform integration)"
+        - "Not sure"
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Links to how other players do it (PotPlayer, foobar2000, VLC…), screenshots, related issues.
