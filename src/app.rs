@@ -11,6 +11,7 @@ use egui::{
 };
 
 use crate::audio::{AudioCmd, AudioEngine, EngineEvent, PlayerState};
+use crate::capture::Capture;
 use crate::config::{Settings, MIN_WIDTH};
 use crate::library::{self, Loader, LoaderEvent};
 use crate::queue::Queue;
@@ -89,6 +90,8 @@ pub struct QuickPlayApp {
     /// The playlist's position last frame, and where we last sent it.
     playlist_last_pos: Option<Pos2>,
     playlist_expected_pos: Option<Pos2>,
+    /// Test-only window capture, armed by `QUICKPLAY_CAPTURE_DIR`.
+    capture: Option<Capture>,
     /// Smoothed bar heights shown by the visualizer.
     spectrum: Vec<f32>,
     /// The last frame taken, which the bars ease toward.
@@ -127,6 +130,7 @@ impl QuickPlayApp {
             dock_anchor: None,
             playlist_last_pos: None,
             playlist_expected_pos: None,
+            capture: Capture::from_env(),
             spectrum: vec![0.0; crate::audio::spectrum::BAND_COUNT],
             spectrum_target: vec![0.0; crate::audio::spectrum::BAND_COUNT],
             spectrum_tick: Instant::now(),
@@ -774,6 +778,7 @@ impl QuickPlayApp {
         let snapshot = self.shortcut_snapshot();
         let queue = &self.queue;
         let selected = self.selected;
+        let capture = self.capture.as_ref();
         let mut size: Option<Vec2> = None;
         let mut outer: Option<Rect> = None;
         let mut dropped: Vec<PathBuf> = Vec::new();
@@ -796,6 +801,9 @@ impl QuickPlayApp {
             }
             // Keys typed into this window land in its own input stream.
             collect_shortcuts(ui.ctx(), snapshot, actions);
+            if let Some(capture) = capture {
+                capture.save(ui.ctx(), "playlist");
+            }
             playlist::show(ui, queue, selected, actions);
             close
         });
@@ -892,6 +900,14 @@ impl eframe::App for QuickPlayApp {
         self.handle_shortcuts(ctx);
         self.track_window_size(ctx);
         self.sync_playlist_minimized(ctx);
+        if let Some(capture) = self.capture.as_mut() {
+            let mut ids = vec![ViewportId::ROOT];
+            if self.settings.show_playlist {
+                ids.push(Self::playlist_viewport_id());
+            }
+            capture.tick(ctx, &ids);
+            capture.save(ctx, "player");
+        }
         if self
             .status
             .as_ref()

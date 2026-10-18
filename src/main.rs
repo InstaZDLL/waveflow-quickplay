@@ -14,6 +14,7 @@
 
 mod app;
 mod audio;
+mod capture;
 mod config;
 mod library;
 mod platform;

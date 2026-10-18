@@ -26,7 +26,10 @@ cargo clippy --all-targets
 cargo test
 ```
 
-`RUST_LOG=debug` turns the log up (stderr). Preferences live in
+`RUST_LOG=debug` turns the log up (stderr). `QUICKPLAY_CAPTURE_DIR=<dir>` writes a
+PNG of each window (`player.png`, `playlist.png`) 2 s after start (or
+`QUICKPLAY_CAPTURE_AFTER_MS`), for testing on displays that cannot be grabbed
+from outside such as GNOME on Wayland. Preferences live in
 `<config dir>/waveflow-quickplay/settings.json` (`%APPDATA%` on Windows,
 `~/.config` on Linux) — a namespace of its own, never read by the desktop
 app.
