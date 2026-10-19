@@ -1,16 +1,37 @@
 # Builds the installers for a version tag (`v1.0.0`) and publishes them as a
-# GitHub release: a per-user NSIS installer for Windows, a .deb and an
-# AppImage for Linux, with SHA-256 checksums and the notes from
+# GitHub release: a per-user NSIS installer for Windows, a .deb, an .rpm and
+# an AppImage for Linux, with SHA-256 checksums and the notes from
 # docs/releases/<tag>.md. Nothing is built unless the tag matches Cargo.toml
 # and the tests pass.
+#
+# It can also be run by hand from `main` for an existing tag (Actions ›
+# Release › Run workflow), with the workflow definition of `main` and the
+# sources of the tag: that is how a package format added after a release
+# gets attached to it. `linux_only` skips the Windows job so the signed
+# installer already published is left untouched; files that are rebuilt
+# replace their namesake on the release.
 name: Release
 
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)build, e.g. v1.0.0"
+        required: true
+        type: string
+      linux_only:
+        description: "Only rebuild and upload the Linux packages"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
+
+env:
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   version:
@@ -20,23 +41,26 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ env.RELEASE_TAG }}
           persist-credentials: false
       - run: |
           version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
-          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
-            echo "::error::tag $GITHUB_REF_NAME does not match version $version"
+          if [ "v$version" != "$RELEASE_TAG" ]; then
+            echo "::error::tag $RELEASE_TAG does not match version $version"
             exit 1
           fi
-          test -f "docs/releases/$GITHUB_REF_NAME.md" || { echo "::error::docs/releases/$GITHUB_REF_NAME.md is missing"; exit 1; }
+          test -f "docs/releases/$RELEASE_TAG.md" || { echo "::error::docs/releases/$RELEASE_TAG.md is missing"; exit 1; }
 
   windows:
     name: Windows installer
     needs: version
+    if: ${{ !inputs.linux_only }}
     runs-on: windows-latest
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ env.RELEASE_TAG }}
           persist-credentials: false
       - run: rustup show active-toolchain
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -141,25 +165,57 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ env.RELEASE_TAG }}
           persist-credentials: false
+      # The packaging definitions (desktop entries, rpm.toml) come from the
+      # workflow's own ref: on a tag push that is the tag itself, on a
+      # manual run it is the branch chosen, so a package format added after
+      # a release can be built for it.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          path: workflow-ref
+          sparse-checkout: packaging
+          persist-credentials: false
+      - run: cp -r workflow-ref/packaging/. packaging/
       - run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends cmake libasound2-dev libxkbcommon-dev libwayland-dev libfuse2 file
+          sudo apt-get install -y --no-install-recommends cmake libasound2-dev libxkbcommon-dev libwayland-dev libfuse2 file rpm
       - run: rustup show active-toolchain
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: cargo test --locked
-      - run: cargo install cargo-packager --locked
+      - run: cargo install cargo-packager cargo-generate-rpm --locked
       - run: cargo packager --release --formats deb,appimage
+      # The .rpm comes from cargo-generate-rpm (cargo-packager has no rpm
+      # format), from the binary cargo-packager just built; its contents
+      # and dependencies are the [package.metadata.generate-rpm] section
+      # kept in packaging/rpm.toml, appended to Cargo.toml here.
+      - name: RPM
+        run: |
+          cat packaging/rpm.toml >> Cargo.toml
+          cargo generate-rpm --payload-compress zstd
+          rpm=$(ls target/generate-rpm/*.rpm)
+          mv "$rpm" target/packager/
+          rpm=target/packager/$(basename "$rpm")
+          rpm -qpi "$rpm"
+          echo "--- files"; rpm -qpl "$rpm"
+          echo "--- requires"; rpm -qpR "$rpm"
+          # The package must carry the binary and the desktop entry, and
+          # nothing it does not declare.
+          rpm -qpl "$rpm" | grep -qx /usr/bin/waveflow-quickplay
+          rpm -qpl "$rpm" | grep -qx /usr/share/applications/app.waveflow.quickplay.desktop
+          rpm -qpR "$rpm" | grep -q 'libasound.so.2'
       - name: Checksums
         run: |
           cd target/packager
-          sha256sum *.deb *.AppImage > SHA256SUMS-linux.txt
+          sha256sum *.deb *.rpm *.AppImage > SHA256SUMS-linux.txt
           cat SHA256SUMS-linux.txt
       - uses: actions/upload-artifact@v7
         with:
           name: linux
           path: |
             target/packager/*.deb
+            target/packager/*.rpm
             target/packager/*.AppImage
             target/packager/SHA256SUMS-linux.txt
           if-no-files-found: error
@@ -167,6 +223,9 @@ jobs:
   publish:
     name: GitHub release
     needs: [windows, linux]
+    # Runs when every job that ran succeeded; `windows` may have been
+    # skipped by `linux_only`.
+    if: ${{ always() && needs.linux.result == 'success' && (needs.windows.result == 'success' || needs.windows.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -174,15 +233,19 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ env.RELEASE_TAG }}
           persist-credentials: false
       - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
       - run: ls -la dist
+      # On an existing release the files replace their namesakes, the
+      # others are kept, and the body is rewritten from the notes at the tag.
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
-          name: WaveFlow QuickPlay ${{ github.ref_name }}
-          body_path: docs/releases/${{ github.ref_name }}.md
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: WaveFlow QuickPlay ${{ env.RELEASE_TAG }}
+          body_path: docs/releases/${{ env.RELEASE_TAG }}.md
           files: dist/*
           generate_release_notes: false
