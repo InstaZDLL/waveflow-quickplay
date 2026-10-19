@@ -198,10 +198,11 @@ cargo test
 cargo install cargo-packager cargo-generate-rpm
 cargo packager --release --formats nsis          # Windows: per-user installer
 cargo packager --release --formats deb,appimage  # Linux
-cat packaging/rpm.toml >> Cargo.toml && cargo generate-rpm   # Linux: .rpm
+cat packaging/rpm.toml >> Cargo.toml && cargo generate-rpm   # Linux: .rpm → target/generate-rpm/
 ```
 
-The installers come out in `target/packager/`. The NSIS template in
+The installers come out in `target/packager/`, the `.rpm` in
+`target/generate-rpm/`. The NSIS template in
 `packaging/installer.nsi` is cargo-packager's with the `--register` /
 `--unregister` steps added; `packaging/quickplay.desktop` is the Linux
 desktop entry. Releases are built by `.github/workflows/release.yml` from a
