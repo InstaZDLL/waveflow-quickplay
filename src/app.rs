@@ -270,13 +270,25 @@ impl QuickPlayApp {
         }
     }
 
+    /// Play row `index`: the cursor moves on to it (Next, a track's end,
+    /// a pick from the list, a skipped failure).
     fn play_index(&mut self, index: usize, start_ms: u64, autoplay: bool) {
+        self.play_index_from(index, start_ms, autoplay, false);
+    }
+
+    /// `back`: the cursor goes back to `index` (Previous), unwinding the
+    /// shuffle history to it instead of recording it again.
+    fn play_index_from(&mut self, index: usize, start_ms: u64, autoplay: bool, back: bool) {
         let Some(entry) = self.queue.get(index) else {
             return;
         };
         let (id, path) = (entry.id, entry.path.clone());
         let meta_duration = entry.duration_ms();
-        self.queue.set_current(Some(index));
+        if back {
+            self.queue.set_current_back(index);
+        } else {
+            self.queue.set_current(Some(index));
+        }
         self.selected = Some(index);
         self.generation += 1;
         self.playing_id = Some(id);
@@ -336,7 +348,7 @@ impl QuickPlayApp {
                 self.play_index(i, 0, true);
             }
         } else if let Some(i) = self.queue.prev_index() {
-            self.play_index(i, 0, true);
+            self.play_index_from(i, 0, true, true);
         }
     }
 

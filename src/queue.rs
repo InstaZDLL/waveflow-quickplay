@@ -186,23 +186,44 @@ impl Queue {
         self.current.and_then(|i| self.entries.get(i))
     }
 
+    /// The cursor moves on to `index`: Next, the end of a track, a pick
+    /// from the list. The track joins the history and the shuffle round;
+    /// a round found complete starts over from it.
     pub fn set_current(&mut self, index: Option<usize>) {
+        self.move_cursor(index, false);
+    }
+
+    /// The cursor goes back to `index`, a track the history holds
+    /// (Previous): the history unwinds to it, so Previous keeps walking
+    /// back from there, and the round is left as it is, since nothing is
+    /// played anew.
+    pub fn set_current_back(&mut self, index: usize) {
+        self.move_cursor(Some(index), true);
+    }
+
+    fn move_cursor(&mut self, index: Option<usize>, back: bool) {
         self.current = index.filter(|i| *i < self.entries.len());
         let Some(id) = self.current().map(|e| e.id) else {
             return;
         };
+        if back {
+            match self.history.iter().rposition(|h| *h == id) {
+                Some(k) => self.history.truncate(k + 1),
+                None => self.history.push(id),
+            }
+            if !self.played.contains(&id) {
+                self.played.push(id);
+            }
+            return;
+        }
         if self.round_complete() {
             self.played.clear();
         }
         if !self.played.contains(&id) {
             self.played.push(id);
         }
-        match self.history.iter().rposition(|h| *h == id) {
-            // Back to a track the history holds (Previous, or a pick from
-            // the list): unwind to it rather than record it again, so
-            // Previous keeps walking back from there.
-            Some(k) => self.history.truncate(k + 1),
-            None => self.history.push(id),
+        if self.history.last() != Some(&id) {
+            self.history.push(id);
         }
     }
 
@@ -415,10 +436,47 @@ mod tests {
         let b = q.next_index().unwrap();
         q.set_current(Some(b));
         assert_eq!(q.prev_index(), Some(a));
-        q.set_current(Some(a));
+        q.set_current_back(a);
         assert_eq!(q.prev_index(), Some(2));
-        q.set_current(Some(2));
+        q.set_current_back(2);
         assert_eq!(q.prev_index(), None, "nothing played before the first");
+    }
+
+    /// A new round under "repeat all" may draw a track already in the
+    /// history; moving on to it records it, and Previous still finds the
+    /// last track of the previous round.
+    #[test]
+    fn a_new_round_keeps_the_previous_round_behind_it() {
+        let mut q = queue_of(2);
+        q.set_repeat(Repeat::All);
+        q.set_current(Some(0));
+        q.set_shuffle(true);
+        assert_eq!(q.next_index(), Some(1));
+        q.set_current(Some(1));
+        assert_eq!(q.next_index(), Some(0), "the new round");
+        q.set_current(Some(0));
+        assert_eq!(q.prev_index(), Some(1));
+        q.set_current_back(1);
+        assert_eq!(q.prev_index(), Some(0));
+    }
+
+    /// With repeat off, going back after the round is over does not open
+    /// a new round: Next stays unavailable.
+    #[test]
+    fn going_back_after_the_round_keeps_it_over() {
+        let mut q = queue_of(2);
+        q.set_current(Some(0));
+        q.set_shuffle(true);
+        let i = q.next_index().unwrap();
+        q.set_current(Some(i));
+        assert!(!q.has_next());
+        let back = q.prev_index().unwrap();
+        q.set_current_back(back);
+        assert!(!q.has_next());
+        assert_eq!(q.next_index(), None);
+        // A pick from the list starts a new round from it.
+        q.set_current(Some(back));
+        assert!(q.has_next());
     }
 
     /// A track that failed or was removed after it played is skipped on
@@ -435,7 +493,7 @@ mod tests {
         q.set_current(Some(b));
         q.entries[a].failed = Some("nope".into());
         assert_eq!(q.prev_index(), Some(0));
-        q.set_current(Some(0));
+        q.set_current_back(0);
         assert_eq!(q.prev_index(), None);
 
         let mut q = queue_of(4);
@@ -450,7 +508,7 @@ mod tests {
         let b = q.entries.iter().position(|e| e.id == b_id).unwrap();
         assert_eq!(q.current_index(), Some(b));
         assert_eq!(q.prev_index(), Some(0));
-        q.set_current(Some(0));
+        q.set_current_back(0);
         assert_eq!(q.prev_index(), None);
     }
 
