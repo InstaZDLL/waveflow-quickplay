@@ -2,10 +2,9 @@
 language: fr-FR
 tone_instructions: >-
   Sois direct et concis. Priorise les bugs réels, les régressions
-  utilisateur, les problèmes de sécurité, les erreurs de logique et les
-  oublis de tests/validation. Évite les remarques purement cosmétiques et
-  tout ce que `cargo fmt` et `clippy -D warnings` couvrent déjà (la CI les
-  exécute).
+  utilisateur, la sécurité, les erreurs de logique et les tests manquants.
+  Ignore le cosmétique et ce que `cargo fmt` et `clippy -D warnings`
+  couvrent déjà (la CI les exécute).
 early_access: true
 reviews:
   profile: assertive
