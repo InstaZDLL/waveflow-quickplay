@@ -405,15 +405,32 @@ fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
     Color32::from_rgb(mix(a.r(), b.r()), mix(a.g(), b.g()), mix(a.b(), b.b()))
 }
 
+/// Where a timed line stands: milliseconds into the line, and the line's
+/// length in milliseconds, up to the moment the next one replaces it.
+pub type LineSpan = (u64, u64);
+
 /// A single line of text that scrolls horizontally when it is wider than
 /// the space it gets (PotPlayer's title / lyric line). Short text is drawn
-/// as a plain label. Long text holds still for a moment, scrolls left at a
+/// as a plain label.
+///
+/// With a `span`, a synced lyric line, the scroll is paced on the line's
+/// own time: it holds, then moves so that its end is on screen before the
+/// next line starts, and stays there ([`paced_offset`]). The clock is the
+/// playback position, so a pause freezes it and a seek moves it.
+///
+/// Without one, long text holds still for a moment, scrolls left at a
 /// steady pace with a gap before it comes round again, and starts over
-/// whenever `epoch` or the text changes, so every lyric line is read from
-/// its start even when two consecutive lines are identical. With
-/// `scrolling` false (player paused or idle) the start of the text is shown
-/// and nothing animates, so an idle window stays at zero repaints.
-pub fn marquee(ui: &mut Ui, text: RichText, epoch: u64, scrolling: bool) -> Response {
+/// whenever `epoch` or the text changes, so every line is read from its
+/// start even when two consecutive lines are identical. With `scrolling`
+/// false (player paused or idle) the start of the text is shown and
+/// nothing animates, so an idle window stays at zero repaints.
+pub fn marquee(
+    ui: &mut Ui,
+    text: RichText,
+    epoch: u64,
+    scrolling: bool,
+    span: Option<LineSpan>,
+) -> Response {
     const HOLD_SECS: f64 = 1.5;
     const SPEED: f64 = 28.0; // points per second
     const GAP: f32 = 48.0;
@@ -438,17 +455,33 @@ pub fn marquee(ui: &mut Ui, text: RichText, epoch: u64, scrolling: bool) -> Resp
         pos2(rect.left(), rect.top() - VERTICAL_SLACK),
         pos2(rect.right(), rect.bottom() + VERTICAL_SLACK),
     );
-    if !scrolling && text_w > width {
-        ui.ctx().data_mut(|d| d.remove::<(u64, f64)>(key));
-        ui.painter()
-            .with_clip_rect(clip)
-            .galley(rect.left_top(), galley, theme::TEXT);
-        return response;
-    }
     if text_w <= width {
         // Forget any scroll state so the next long text starts from its hold.
         ui.ctx().data_mut(|d| d.remove::<(u64, f64)>(key));
         ui.painter().galley(rect.left_top(), galley, theme::TEXT);
+        return response;
+    }
+    if let Some((elapsed_ms, total_ms)) = span {
+        ui.ctx().data_mut(|d| d.remove::<(u64, f64)>(key));
+        let (offset, wait) = paced_offset(elapsed_ms, total_ms, text_w - width);
+        ui.painter().with_clip_rect(clip).galley(
+            pos2(rect.left() - offset, rect.top()),
+            galley,
+            theme::TEXT,
+        );
+        // Paused: the position stands still, so does the line.
+        if scrolling {
+            if let Some(wait) = wait {
+                ui.ctx().request_repaint_after(wait);
+            }
+        }
+        return response;
+    }
+    if !scrolling {
+        ui.ctx().data_mut(|d| d.remove::<(u64, f64)>(key));
+        ui.painter()
+            .with_clip_rect(clip)
+            .galley(rect.left_top(), galley, theme::TEXT);
         return response;
     }
 
@@ -480,4 +513,80 @@ pub fn marquee(ui: &mut Ui, text: RichText, epoch: u64, scrolling: bool) -> Resp
     };
     ui.ctx().request_repaint_after(wait);
     response
+}
+
+/// How far a timed line has scrolled, `elapsed_ms` into its `total_ms`,
+/// when it overflows its column by `overflow` points: nothing during an
+/// opening hold, then a steady move that brings the end into view with a
+/// closing hold to spare, then the end until the line is replaced. The
+/// holds are 1.5 s and 1 s whenever they leave the move at least half of
+/// the line, and shrink in proportion on a line briefer than that (5 s).
+/// Also says when the next repaint is due: the end of the opening hold, a
+/// tick while moving, nothing once the end is reached.
+pub fn paced_offset(
+    elapsed_ms: u64,
+    total_ms: u64,
+    overflow: f32,
+) -> (f32, Option<std::time::Duration>) {
+    const TICK: std::time::Duration = std::time::Duration::from_millis(33);
+    const HOLD_MS: u64 = 1500;
+    const END_HOLD_MS: u64 = 1000;
+    let budget = total_ms / 2;
+    let (hold, end_hold) = if HOLD_MS + END_HOLD_MS <= budget {
+        (HOLD_MS, END_HOLD_MS)
+    } else {
+        let full = HOLD_MS + END_HOLD_MS;
+        (HOLD_MS * budget / full, END_HOLD_MS * budget / full)
+    };
+    let window = total_ms.saturating_sub(hold + end_hold).max(1);
+    if elapsed_ms < hold {
+        return (
+            0.0,
+            Some(std::time::Duration::from_millis(hold - elapsed_ms)),
+        );
+    }
+    let moved = elapsed_ms - hold;
+    if moved >= window {
+        return (overflow, None);
+    }
+    (overflow * (moved as f32 / window as f32), Some(TICK))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::paced_offset;
+
+    #[test]
+    fn a_timed_line_holds_then_reaches_its_end_before_it_is_replaced() {
+        // 8 s line, 200 pt too wide: 1.5 s hold, 5.5 s moving, 1 s at the end.
+        assert_eq!(paced_offset(0, 8000, 200.0).0, 0.0);
+        assert_eq!(paced_offset(1499, 8000, 200.0).0, 0.0);
+        assert_eq!(paced_offset(1500 + 2750, 8000, 200.0).0, 100.0);
+        assert_eq!(paced_offset(7000, 8000, 200.0), (200.0, None));
+        assert_eq!(paced_offset(7999, 8000, 200.0), (200.0, None));
+    }
+
+    #[test]
+    fn a_line_with_room_for_the_holds_keeps_them() {
+        // 5 s line: the holds take exactly half; 1.5 s hold, 2.5 s moving,
+        // 1 s at the end.
+        assert_eq!(paced_offset(1499, 5000, 100.0).0, 0.0);
+        assert_eq!(paced_offset(1500 + 1250, 5000, 100.0).0, 50.0);
+        assert_eq!(paced_offset(4000, 5000, 100.0), (100.0, None));
+    }
+
+    #[test]
+    fn a_brief_line_shortens_its_holds_in_proportion() {
+        // 2 s line: the holds get 1 s between them, 0.6 s and 0.4 s;
+        // 1 s moving.
+        assert_eq!(paced_offset(599, 2000, 100.0).0, 0.0);
+        assert_eq!(paced_offset(600 + 500, 2000, 100.0).0, 50.0);
+        assert_eq!(paced_offset(1600, 2000, 100.0).0, 100.0);
+    }
+
+    #[test]
+    fn the_opening_hold_asks_for_one_repaint_at_its_end() {
+        let (_, wait) = paced_offset(400, 8000, 50.0);
+        assert_eq!(wait, Some(std::time::Duration::from_millis(1100)));
+    }
 }

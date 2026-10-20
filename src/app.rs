@@ -808,13 +808,17 @@ impl QuickPlayApp {
             .as_ref()
             .filter(|(_, at)| at.elapsed() < STATUS_TTL)
             .map(|(s, _)| s.as_str());
-        let lyric = current
-            .and(self.lyrics.as_ref())
-            .and_then(|l| l.current(position_ms));
+        let lyrics = current.and(self.lyrics.as_ref());
+        let lyric = lyrics.and_then(|l| l.current(position_ms));
+        let lyric_span = lyric.and_then(|(at, _)| {
+            let next = lyrics?.next_change_after(position_ms)?;
+            Some((position_ms.saturating_sub(at), next.saturating_sub(at)))
+        });
         PlayerView {
             title: current.map_or("", |e| e.title()),
             lyric: lyric.map(|(_, text)| text),
             lyric_epoch: lyric.map_or(0, |(at, _)| at),
+            lyric_span,
             artist: current.and_then(|e| e.artist()),
             album: current.and_then(|e| e.album()),
             format_chips,
