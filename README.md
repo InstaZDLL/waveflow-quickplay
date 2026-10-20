@@ -120,7 +120,7 @@ They are complementary, not two sizes of the same thing: QuickPlay deliberately 
 
 - A `song.lrc` next to `song.flac` is read when the track starts; the current line replaces the title as the song plays, and an empty line, or the lead-in, shows the title again, as PotPlayer does.
 - `[offset:]` and enhanced-LRC word stamps are honoured; nothing is fetched from the network.
-- A title or lyric line wider than its column holds for a moment, then scrolls across and comes round again.
+- A lyric line wider than its column scrolls at the pace of its own time: it holds for a moment, moves so that its end is on screen before the next line starts, and stays there. A long title holds, scrolls across and comes round again.
 
 ### 🖱️ From the file manager
 

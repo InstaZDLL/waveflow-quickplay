@@ -78,6 +78,7 @@ pub fn controls(ui: &mut Ui, view: &PlayerView<'_>, actions: &mut Vec<Action>) {
                 title,
                 view.lyric_epoch,
                 view.state == PlayerState::Playing,
+                view.lyric_span,
             );
             let subtitle = if view.has_track {
                 match (view.artist, view.album) {

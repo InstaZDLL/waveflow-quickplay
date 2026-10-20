@@ -61,6 +61,10 @@ pub struct PlayerView<'a> {
     /// Start time of that line, so two identical consecutive lines still
     /// restart the scroll; 0 when the title is shown.
     pub lyric_epoch: u64,
+    /// How far into the lyric line the playback is, and how long the line
+    /// lasts, so a long line scrolls at the pace of its own time. `None`
+    /// for the title, and for a last line with no end.
+    pub lyric_span: Option<widgets::LineSpan>,
     pub artist: Option<&'a str>,
     pub album: Option<&'a str>,
     /// `AAC`, `256 kbps`, `48.0 kHz`, `16-bit` — whatever is known.
