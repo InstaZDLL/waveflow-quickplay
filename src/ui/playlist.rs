@@ -7,6 +7,7 @@ use egui::{vec2, Align, Key, Label, Layout, Modifiers, RichText, Sense, Ui};
 use super::icons::{self, Icon};
 use super::widgets::{bar_button, title_bar, TitleAction};
 use super::{format_time, theme, Action, TITLE_HEIGHT};
+use crate::config::Repeat;
 use crate::i18n::{fill, Strings};
 use crate::queue::Queue;
 
@@ -88,6 +89,28 @@ pub fn show(
                                 .size(11.0)
                                 .color(theme::TEXT_FAINT),
                         );
+                        ui.add_space(6.0);
+                    }
+                    // Playback order, lit when on: [repeat] [shuffle].
+                    if bar_button(
+                        ui,
+                        Icon::Shuffle,
+                        TOOL_BUTTON,
+                        t.tip_shuffle,
+                        true,
+                        queue.shuffle(),
+                    )
+                    .clicked()
+                    {
+                        actions.push(Action::ToggleShuffle);
+                    }
+                    let (icon, tip, on) = match queue.repeat() {
+                        Repeat::Off => (Icon::Repeat, t.tip_repeat_off, false),
+                        Repeat::All => (Icon::Repeat, t.tip_repeat_all, true),
+                        Repeat::One => (Icon::RepeatOne, t.tip_repeat_one, true),
+                    };
+                    if bar_button(ui, icon, TOOL_BUTTON, tip, true, on).clicked() {
+                        actions.push(Action::CycleRepeat);
                     }
                 });
             });

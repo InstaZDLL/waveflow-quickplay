@@ -12,7 +12,7 @@ use egui::{
 
 use crate::audio::{AudioCmd, AudioEngine, EngineEvent, PlayerState};
 use crate::capture::Capture;
-use crate::config::{Settings, MIN_WIDTH};
+use crate::config::{Repeat, Settings, MIN_WIDTH};
 use crate::i18n::{fill, Lang, Strings};
 use crate::ipc;
 use crate::library::{self, Loader, LoaderEvent};
@@ -140,8 +140,11 @@ impl QuickPlayApp {
         let notify_ctx = ctx.clone();
         let notify: Arc<dyn Fn() + Send + Sync> = Arc::new(move || notify_ctx.request_repaint());
         let lang = Lang::resolve(&settings.language);
+        let mut queue = Queue::default();
+        queue.set_repeat(settings.repeat);
+        queue.set_shuffle(settings.shuffle);
         let mut app = Self {
-            queue: Queue::default(),
+            queue,
             engine: None,
             loader: Loader::new(notify),
             ctx,
@@ -303,6 +306,18 @@ impl QuickPlayApp {
         self.loader.request_cover(entry.id, entry.path.clone());
     }
 
+    /// The track played to its end: the same one again under "repeat one",
+    /// the next one otherwise. Only here; the Next button always moves on.
+    fn track_ended(&mut self) {
+        if self.queue.repeat() == Repeat::One {
+            if let Some(i) = self.queue.current_index() {
+                self.play_index(i, 0, true);
+                return;
+            }
+        }
+        self.next();
+    }
+
     fn next(&mut self) {
         match self.queue.next_index() {
             Some(i) => self.play_index(i, 0, true),
@@ -456,7 +471,7 @@ impl QuickPlayApp {
                 }
                 EngineEvent::Ended { generation } if generation == self.generation => {
                     self.state = PlayerState::Ended;
-                    self.next();
+                    self.track_ended();
                 }
                 EngineEvent::Ended { .. } => {}
                 EngineEvent::Error {
@@ -737,6 +752,16 @@ impl QuickPlayApp {
                 }
             }
             Action::Clear => self.clear(),
+            Action::CycleRepeat => {
+                self.settings.repeat = self.settings.repeat.cycled();
+                self.queue.set_repeat(self.settings.repeat);
+                self.settings.save();
+            }
+            Action::ToggleShuffle => {
+                self.settings.shuffle = !self.settings.shuffle;
+                self.queue.set_shuffle(self.settings.shuffle);
+                self.settings.save();
+            }
             Action::Stop => {
                 self.send(AudioCmd::Stop);
                 self.state = PlayerState::Idle;
@@ -1253,6 +1278,12 @@ fn collect_shortcuts(ctx: &egui::Context, snap: ShortcutSnapshot, out: &mut Vec<
         }
         if i.consume_key(Modifiers::NONE, Key::T) {
             out.push(Action::TogglePin);
+        }
+        if i.consume_key(Modifiers::NONE, Key::R) {
+            out.push(Action::CycleRepeat);
+        }
+        if i.consume_key(Modifiers::NONE, Key::H) {
+            out.push(Action::ToggleShuffle);
         }
         if i.consume_key(Modifiers::COMMAND, Key::O) {
             out.push(Action::OpenFiles);

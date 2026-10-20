@@ -27,6 +27,12 @@ pub enum Icon {
     Settings,
     /// WaveFlow's three bars.
     Logo,
+    /// Two arrows chasing each other round a circle.
+    Repeat,
+    /// The same with a "1" inside.
+    RepeatOne,
+    /// Two crossing arrows.
+    Shuffle,
 }
 
 /// Paint `icon` centred in `rect`, scaled to its shorter side.
@@ -233,7 +239,74 @@ pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
             );
             painter.circle_filled(p(0.0, 0.22), (s * 0.05).max(1.0), dark);
         }
+        Icon::Repeat | Icon::RepeatOne => {
+            // Two arcs, each ending in an arrowhead: over the top from left
+            // to right, under the bottom from right to left.
+            // Drawn large in its box: at the toolbar's 11 px the heads must
+            // still read as arrows.
+            let r = u(0.42);
+            let deg = std::f32::consts::PI / 180.0;
+            arrow_arc(painter, c, r, -150.0 * deg, -35.0 * deg, u(0.24), stroke);
+            arrow_arc(painter, c, r, 30.0 * deg, 145.0 * deg, u(0.24), stroke);
+            if icon == Icon::RepeatOne {
+                painter.text(
+                    c,
+                    egui::Align2::CENTER_CENTER,
+                    "1",
+                    egui::FontId::proportional(s * 0.62),
+                    color,
+                );
+            }
+        }
+        Icon::Shuffle => {
+            // Two paths crossing in the middle, each ending in an arrowhead.
+            for sign in [-1.0_f32, 1.0] {
+                let y = 0.30 * sign;
+                let points = vec![p(-0.48, y), p(-0.20, y), p(0.12, -y), p(0.26, -y)];
+                painter.add(Shape::line(points, PathStroke::from(stroke)));
+                arrow_head(painter, p(0.26, -y), vec2(1.0, 0.0), u(0.24), color);
+            }
+        }
     }
+}
+
+/// An arc of `radius` round `center` from angle `a0` to `a1` (screen
+/// angles, y down), with an arrowhead at its end pointing along it.
+fn arrow_arc(
+    painter: &Painter,
+    center: Pos2,
+    radius: f32,
+    a0: f32,
+    a1: f32,
+    head: f32,
+    stroke: Stroke,
+) {
+    let steps = 12;
+    let points: Vec<Pos2> = (0..=steps)
+        .map(|i| {
+            let t = a0 + (a1 - a0) * (i as f32 / steps as f32);
+            pos2(center.x + radius * t.cos(), center.y + radius * t.sin())
+        })
+        .collect();
+    let end = points[steps];
+    painter.add(Shape::line(points, PathStroke::from(stroke)));
+    let tangent = vec2(-a1.sin(), a1.cos());
+    arrow_head(painter, end, tangent, head, stroke.color);
+}
+
+/// A filled arrowhead whose base is at `at`, pointing along `dir`.
+fn arrow_head(painter: &Painter, at: Pos2, dir: egui::Vec2, size: f32, color: Color32) {
+    let dir = dir.normalized();
+    let normal = vec2(-dir.y, dir.x);
+    painter.add(Shape::convex_polygon(
+        vec![
+            at + dir * size,
+            at + normal * size * 0.7,
+            at - normal * size * 0.7,
+        ],
+        color,
+        Stroke::NONE,
+    ));
 }
 
 /// A right-facing arc (volume waves).

@@ -115,6 +115,7 @@ They are complementary, not two sizes of the same thing: QuickPlay deliberately 
 - A second window beside the player, fast with long queues, showing number, title, artist and duration, the current row in the accent colour and failed rows flagged.
 - **Docked**: it follows the player when it moves or widens (drag the playlist to change where it sits), minimizes and restores with it, and shares its taskbar button.
 - Double-click to play, right-click for Play / Remove, `Delete` to remove, add / remove / clear in the toolbar.
+- **Repeat and shuffle** in the toolbar: one press repeats the playlist, a second the current track; shuffle plays every track once before any comes again, and Previous walks back through what played. Both are remembered.
 
 ### 🎤 Lyrics
 
@@ -171,6 +172,8 @@ They are complementary, not two sizes of the same thing: QuickPlay deliberately 
 | L                   | Show / hide the playlist    |
 | S (or click it)     | Show / hide the spectrum    |
 | T                   | Always on top               |
+| R                   | Repeat: all, one track, off |
+| H                   | Shuffle                     |
 | Ctrl+O              | Open files                  |
 | Delete (playlist)   | Remove the selected track   |
 | Esc                 | Close the settings page     |
