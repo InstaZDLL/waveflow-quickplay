@@ -1,8 +1,11 @@
 //! The decoder thread: blocks on the command channel when idle, owns the
-//! open `ActiveStream` and the producer half of the ring while a track
-//! plays, and polls commands between packets so pause / seek / stop stay
+//! open `ActiveStream` (waveflow-core's, the decoding the desktop engine
+//! plays through) and the producer half of the ring while a track plays,
+//! and polls commands between packets so pause / seek / stop stay
 //! responsive. Reports back through [`EventSink`] rather than Tauri events.
 
+use std::fs::File;
+use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -15,7 +18,8 @@ use super::engine::{AudioCmd, EngineEvent};
 use super::output::RING_CAPACITY;
 use super::spectrum::SpectrumAnalyzer;
 use super::state::{PlayerState, SharedPlayback};
-use super::stream::ActiveStream;
+use waveflow_core::playback::replay_gain::TrackGain;
+use waveflow_core::playback::stream::ActiveStream;
 
 /// Where the decoder's events go, plus a wake-up for the UI loop (egui
 /// repaints only when asked; the engine asks).
@@ -42,6 +46,56 @@ const DRAIN_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// Longest a finished track waits for its tail to play out.
 const TAIL_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// FIR length for the DSD → PCM converter: the desktop's default (its
+/// "standard" DSD precision; 1024 and 2048 are its higher settings). A
+/// 64-tap filter, one output period long, lets the DSD shaping noise
+/// through as a steady hiss: measured on a DSD64 file at 44.1 kHz, the
+/// 15–22 kHz band sits at −85 dB with 64 taps and at −115 dB with 256,
+/// for a fifth more decoding time.
+const DSD_TAPS: usize = 256;
+
+/// Open `path` through waveflow-core's player decoding. The library
+/// identifiers of that call (track id, duration, source) are the desktop's
+/// and stay empty here: the length comes from the container instead
+/// (`container_duration_ms`). No ReplayGain and no DoP, both out of
+/// QuickPlay's scope.
+///
+/// Files other than DSD go through `open_from_source` with the file
+/// itself, not through `open`: on a network share `open` first reads the
+/// whole file into memory (up to 512 MiB), and this thread would answer
+/// neither Stop nor Shutdown until the transfer ends. QuickPlay streams
+/// the file as it did before, and plays from the first packet.
+fn open_stream(path: &Path) -> Result<ActiveStream, String> {
+    let ext = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_ascii_lowercase());
+    if matches!(ext.as_deref(), Some("dsf") | Some("dff")) {
+        // The DSD pipeline reads block by block; `open` branches to it
+        // before any pre-load.
+        return ActiveStream::open(
+            path,
+            0,
+            0,
+            String::new(),
+            None,
+            TrackGain::default(),
+            DSD_TAPS,
+            false,
+        );
+    }
+    let file = File::open(path).map_err(|e| format!("open: {e}"))?;
+    ActiveStream::open_from_source(
+        Box::new(file),
+        ext.as_deref(),
+        0,
+        0,
+        String::new(),
+        None,
+        TrackGain::default(),
+    )
+}
 
 pub fn spawn_decoder_thread(
     cmd_rx: Receiver<AudioCmd>,
@@ -114,7 +168,7 @@ fn decoder_loop(
                 shared.drain_silent.store(true, Ordering::Release);
                 shared.paused_output.store(false, Ordering::Release);
                 drain_ring(producer, shared);
-                let mut stream = match ActiveStream::open(&path) {
+                let mut stream = match open_stream(&path) {
                     Ok(s) => s,
                     Err(message) => {
                         tracing::warn!(path = %path.display(), %message, "track failed to open");
@@ -128,6 +182,8 @@ fn decoder_loop(
                     }
                 };
                 if start_ms > 0 {
+                    // Nothing decoded yet, so the resampler is still the
+                    // pass-through placeholder: no history to drop.
                     stream.seek_ms(start_ms);
                     stream.reset_decoder();
                 }
@@ -136,8 +192,8 @@ fn decoder_loop(
                 shared.drain_silent.store(false, Ordering::Release);
                 events.emit(EngineEvent::Loaded {
                     generation,
-                    duration_ms: stream.duration_ms(),
-                    codec: stream.codec().map(str::to_owned),
+                    duration_ms: stream.container_duration_ms,
+                    codec: stream.codec.clone(),
                 });
                 set_state(
                     shared,
@@ -169,6 +225,11 @@ struct Session<'a> {
     shared: &'a SharedPlayback,
     events: &'a EventSink,
     stream: &'a mut ActiveStream,
+    /// The load this track came from, for the events it emits.
+    generation: u64,
+    /// The output's rate and channel count, what the stream decodes to.
+    dst_rate: u32,
+    dst_channels: usize,
     /// Decoded samples not yet pushed into the ring.
     out: Vec<f32>,
     /// The stream has ended; its tail is still playing out of the ring.
@@ -194,6 +255,21 @@ impl Session<'_> {
             .feed(&self.out[before..], channels, rate, ahead, &mut queue);
     }
 
+    /// Move the stream to `ms` and start it afresh there: decoder state,
+    /// and the resampler too. Core's `reset_decoder` leaves the resampler
+    /// alone, and the chunk it still holds plus its filter history would
+    /// otherwise play the old position for a few milliseconds first.
+    /// Rebuilding it also restarts the count that cuts the tail at the end
+    /// of the track at the right length. An error here leaves the stream
+    /// unfit to continue, like a decode error.
+    fn seek_to(&mut self, ms: u64) -> Result<(), String> {
+        self.stream.seek_ms(ms);
+        self.stream.reset_decoder();
+        self.stream
+            .rebuild_resampler(1.0, self.dst_rate, self.dst_channels)
+            .map(|_| ())
+    }
+
     /// Apply one command. `Some(exit)` ends the track for the caller.
     fn handle(&mut self, cmd: AudioCmd) -> Option<Exit> {
         match cmd {
@@ -212,7 +288,7 @@ impl Session<'_> {
                 None
             }
             AudioCmd::Seek(ms) => {
-                let ms = match self.stream.duration_ms() {
+                let ms = match self.stream.container_duration_ms {
                     Some(d) if d > 0 => ms.min(d.saturating_sub(1)),
                     _ => ms,
                 };
@@ -225,8 +301,15 @@ impl Session<'_> {
                 drain_ring(self.producer, self.shared);
                 self.out.clear();
                 self.spectrum.discard_pending();
-                self.stream.seek_ms(ms);
-                self.stream.reset_decoder();
+                if let Err(message) = self.seek_to(ms) {
+                    tracing::warn!(%message, ms, "seek failed");
+                    stop_playback(self.producer, self.shared, self.events);
+                    self.events.emit(EngineEvent::Error {
+                        generation: Some(self.generation),
+                        message,
+                    });
+                    return Some(Exit::Idle);
+                }
                 self.shared.restart_clock(ms);
                 self.shared
                     .paused_output
@@ -264,6 +347,9 @@ fn play_track(
         shared,
         events,
         stream,
+        generation,
+        dst_rate,
+        dst_channels,
         out: Vec::with_capacity(16_384),
         eof: None,
         spectrum: SpectrumAnalyzer::new(),
@@ -319,7 +405,9 @@ fn play_track(
             continue;
         }
 
-        // 5. Decode the next packet.
+        // 5. Decode the next packet. At the end of the stream the resampler's
+        //    tail comes in `out` along with the `Ok(true)`, cut to the
+        //    track's length; step 3 plays it before step 4 acts on the end.
         let before = session.out.len();
         match session
             .stream
@@ -327,10 +415,10 @@ fn play_track(
         {
             Ok(false) => {
                 session.feed_spectrum(before, dst_rate, dst_channels);
-                if !logged_rate && session.stream.source_sample_rate() > 0 {
+                if !logged_rate && session.stream.src_sample_rate > 0 {
                     logged_rate = true;
                     tracing::debug!(
-                        src_rate = session.stream.source_sample_rate(),
+                        src_rate = session.stream.src_sample_rate,
                         dst_rate,
                         dst_channels,
                         "decoding"

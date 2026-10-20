@@ -212,15 +212,17 @@ desktop entry. Releases are built by `.github/workflows/release.yml` from a
 
 QuickPlay is Rust + egui, under 8 000 lines including the language tables,
 on top of `waveflow-core`, the crate that holds WaveFlow's codec registry
-(symphonia + libopus), DSD converter and tag reader. The desktop engine
-itself is tied to Tauri, so QuickPlay carries a small playback pipeline of
-its own with the same topology: a decoder thread feeding a lock-free ring
-that the audio callback drains, state shared through atomics, the output
-position as the one clock.
+(symphonia + libopus), DSD converter, tag reader and, behind its `playback`
+feature, the decoding the desktop plays through: open a track, decode it
+to `f32`, fit its channels and rate to the output's, seek. The desktop
+engine around that decoding is tied to Tauri, so QuickPlay carries a small
+transport of its own with the same topology: a decoder thread feeding a
+lock-free ring that the audio callback drains, state shared through
+atomics, the output position as the one clock.
 
 ```text
 UI thread (egui)  ──AudioCmd──►  decoder thread  ──f32 ring──►  audio callback
-                  ◄──events──    symphonia / DSD → channels → resampler
+                  ◄──events──    waveflow-core: decode → channels → resample
 ```
 
 The playlist is a second native window the player owns and docks; a local
@@ -291,9 +293,9 @@ The working set is dominated by the OpenGL driver and the decoded cover
 - **Fonts**: Inter and Noto Sans CJK are embedded; a system face is
   appended as a last fallback for anything else. The CJK file is 16 MB of
   the binary.
-- One copy of the pipeline per application. If the prototype is adopted,
-  the next step is a Tauri-free `waveflow-audio` crate with an event-sink
-  trait, which both the desktop engine and QuickPlay would consume.
+- The transport (decoder thread, ring, callback) is QuickPlay's own; the
+  decoding is shared with the desktop through `waveflow-core`, and a fix
+  made there reaches QuickPlay when the pinned `rev` is bumped.
 
 ## Contributing
 

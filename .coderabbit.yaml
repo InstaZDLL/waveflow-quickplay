@@ -31,15 +31,17 @@ reviews:
   path_instructions:
     - path: "src/audio/**"
       instructions: >-
-        Pipeline audio temps réel de QuickPlay (thread décodeur → ring SPSC
-        rtrb → callback cpal), copie réduite de la topologie du moteur
-        desktop. Dans le callback cpal, signale toute allocation, lock,
-        I/O, log ou opération bloquante. Vérifie les atomics partagés
-        (position, état, volume, `drain_silent`, `paused_output` : le drain
-        se teste avant la pause), la gestion des générations d'événements
-        (un événement d'état ne compte qu'après le `Loaded` de la piste en
-        cours), le flush du resampler en fin de piste et son reset au seek,
-        les formats d'échantillons cpal et le mono → multicanal. Pas d'EQ,
+        Transport audio temps réel de QuickPlay (thread décodeur → ring SPSC
+        rtrb → callback cpal), même topologie que le moteur desktop. Le
+        décodage lui-même (`ActiveStream`, resampler, conversion de canaux)
+        vient de `waveflow_core::playback` et ne doit pas être recopié ici.
+        Dans le callback cpal, signale toute allocation, lock, I/O, log ou
+        opération bloquante. Vérifie les atomics partagés (position, état,
+        volume, `drain_silent`, `paused_output` : le drain se teste avant la
+        pause), la gestion des générations d'événements (un événement d'état
+        ne compte qu'après le `Loaded` de la piste en cours), la lecture de
+        ce que `decode_next` a rendu avant de traiter la fin de piste, le
+        `reset_decoder` au seek et les formats d'échantillons cpal. Pas d'EQ,
         crossfade, gapless, ReplayGain, sélection de périphérique ni mode
         exclusif : c'est hors périmètre par conception, signale-le si une PR
         en ajoute.

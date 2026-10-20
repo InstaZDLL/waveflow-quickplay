@@ -20,15 +20,20 @@ publish = false
 # ── WaveFlow shared infrastructure ───────────────────────────────────────
 # `waveflow-core`: the one codec registry (`audio_format::opus::codecs()`,
 # symphonia + libopus), the DSD parser + PCM converter, the scanner's tag /
-# cover / probe helpers and `AUDIO_EXTENSIONS`. Default features keep Opus
-# on, which builds the vendored libopus and therefore needs cmake — the same
+# cover / probe helpers and `AUDIO_EXTENSIONS`, and with the `playback`
+# feature the decoding for playback itself (`playback::stream::ActiveStream`:
+# open, decode to interleaved f32, channel-convert, resample, seek), the code
+# the desktop engine plays through. Default features keep Opus on, which
+# builds the vendored libopus and therefore needs cmake — the same
 # requirement the desktop app already has. `sqlite` / `plugins` are left
 # off: no database, no plugin host in QuickPlay.
 # Pinned to a WaveFlow commit so the build is reproducible without a checkout
 # next door; bump the `rev` to pick up core changes. For local work against
 # a WaveFlow checkout, override it from the command line:
 #   cargo build --config 'patch."https://github.com/InstaZDLL/WaveFlow".waveflow-core.path="../WaveFlow/src-tauri/crates/core"'
-waveflow-core = { git = "https://github.com/InstaZDLL/WaveFlow", rev = "75bd2b6918ef35821def921e209d483388f27d30" }
+waveflow-core = { git = "https://github.com/InstaZDLL/WaveFlow", rev = "1274b65034dc60962a3c6a8dc06df67303c79c81", features = [
+    "playback",
+] }
 
 # ── UI ──────────────────────────────────────────────────────────────────
 # glow (OpenGL) rather than wgpu: a smaller dependency tree, a faster cold
@@ -42,26 +47,14 @@ eframe = { version = "0.36", default-features = false, features = [
 ] }
 egui = "0.36"
 
-# ── Audio pipeline (the same crates and versions the desktop engine uses) ─
+# ── Audio transport (the same crates and versions the desktop engine uses) ─
+# Decoding, channel conversion and resampling come from `waveflow-core`
+# (symphonia, rubato); these carry the samples to the device.
 cpal = "0.18"
 rtrb = "0.4"
-rubato = "5.0"
 # FFT for the spectrum visualizer, the same wrapper the desktop uses.
 realfft = "3"
 crossbeam-channel = "0.5"
-symphonia = { version = "0.6", default-features = false, features = [
-    "mp3",
-    "flac",
-    "wav",
-    "aiff",
-    "vorbis",
-    "ogg",
-    "aac",
-    "alac",
-    "isomp4",
-    "pcm",
-    "all-meta",
-] }
 
 # ── Metadata + artwork ──────────────────────────────────────────────────
 # lofty is reached through `waveflow_core::scanner::extract::read_tagged_file`,
