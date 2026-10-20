@@ -276,8 +276,19 @@ impl QuickPlayApp {
         self.play_index_from(index, start_ms, autoplay, false);
     }
 
-    /// `back`: the cursor goes back to `index` (Previous), unwinding the
-    /// shuffle history to it instead of recording it again.
+    /// Play the current track again from `start_ms` (its end under "repeat
+    /// one", Play after the end, a seek after the end, Previous in the
+    /// first seconds). The cursor does not move, so neither the shuffle
+    /// history nor the round changes: a round that was over stays over.
+    fn restart_current(&mut self, start_ms: u64) {
+        if let Some(i) = self.queue.current_index() {
+            self.play_index_from(i, start_ms, true, true);
+        }
+    }
+
+    /// `back`: the cursor goes back to `index` (Previous, or the current
+    /// track again), unwinding the shuffle history to it instead of
+    /// recording it again.
     fn play_index_from(&mut self, index: usize, start_ms: u64, autoplay: bool, back: bool) {
         let Some(entry) = self.queue.get(index) else {
             return;
@@ -321,11 +332,9 @@ impl QuickPlayApp {
     /// The track played to its end: the same one again under "repeat one",
     /// the next one otherwise. Only here; the Next button always moves on.
     fn track_ended(&mut self) {
-        if self.queue.repeat() == Repeat::One {
-            if let Some(i) = self.queue.current_index() {
-                self.play_index(i, 0, true);
-                return;
-            }
+        if self.queue.repeat() == Repeat::One && self.queue.current_index().is_some() {
+            self.restart_current(0);
+            return;
         }
         self.next();
     }
@@ -344,9 +353,7 @@ impl QuickPlayApp {
     fn prev(&mut self) {
         let position = self.engine.as_ref().map_or(0, |e| e.shared().position_ms());
         if position > PREV_RESTART_THRESHOLD_MS || self.queue.prev_index().is_none() {
-            if let Some(i) = self.queue.current_index() {
-                self.play_index(i, 0, true);
-            }
+            self.restart_current(0);
         } else if let Some(i) = self.queue.prev_index() {
             self.play_index_from(i, 0, true, true);
         }
@@ -357,8 +364,8 @@ impl QuickPlayApp {
             PlayerState::Playing => self.send(AudioCmd::Pause),
             PlayerState::Paused | PlayerState::Loading => self.send(AudioCmd::Resume),
             PlayerState::Idle | PlayerState::Ended => {
-                if let Some(i) = self.queue.current_index() {
-                    self.play_index(i, 0, true);
+                if self.queue.current_index().is_some() {
+                    self.restart_current(0);
                 } else if let Some(i) = self.queue.next_index() {
                     self.play_index(i, 0, true);
                 }
@@ -376,11 +383,7 @@ impl QuickPlayApp {
                 self.send(AudioCmd::Seek(ms));
             }
             // After a natural end the decoder is idle: reload at the offset.
-            PlayerState::Ended | PlayerState::Idle => {
-                if let Some(i) = self.queue.current_index() {
-                    self.play_index(i, ms, true);
-                }
-            }
+            PlayerState::Ended | PlayerState::Idle => self.restart_current(ms),
         }
     }
 

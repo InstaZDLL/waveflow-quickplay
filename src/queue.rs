@@ -470,6 +470,10 @@ mod tests {
         let i = q.next_index().unwrap();
         q.set_current(Some(i));
         assert!(!q.has_next());
+        // Playing the last track again (repeat one, Play after the end)
+        // goes through the same path and leaves the round over too.
+        q.set_current_back(i);
+        assert!(!q.has_next());
         let back = q.prev_index().unwrap();
         q.set_current_back(back);
         assert!(!q.has_next());
