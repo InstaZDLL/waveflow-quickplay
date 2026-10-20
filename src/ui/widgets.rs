@@ -519,17 +519,25 @@ pub fn marquee(
 /// when it overflows its column by `overflow` points: nothing during an
 /// opening hold, then a steady move that brings the end into view with a
 /// closing hold to spare, then the end until the line is replaced. The
-/// holds are 1.5 s and 1 s, shortened on a line too brief for them. Also
-/// says when the next repaint is due: the end of the opening hold, a tick
-/// while moving, nothing once the end is reached.
+/// holds are 1.5 s and 1 s whenever they leave the move at least half of
+/// the line, and shrink in proportion on a line briefer than that (5 s).
+/// Also says when the next repaint is due: the end of the opening hold, a
+/// tick while moving, nothing once the end is reached.
 pub fn paced_offset(
     elapsed_ms: u64,
     total_ms: u64,
     overflow: f32,
 ) -> (f32, Option<std::time::Duration>) {
     const TICK: std::time::Duration = std::time::Duration::from_millis(33);
-    let hold = 1500.min(total_ms / 4);
-    let end_hold = 1000.min(total_ms / 5);
+    const HOLD_MS: u64 = 1500;
+    const END_HOLD_MS: u64 = 1000;
+    let budget = total_ms / 2;
+    let (hold, end_hold) = if HOLD_MS + END_HOLD_MS <= budget {
+        (HOLD_MS, END_HOLD_MS)
+    } else {
+        let full = HOLD_MS + END_HOLD_MS;
+        (HOLD_MS * budget / full, END_HOLD_MS * budget / full)
+    };
     let window = total_ms.saturating_sub(hold + end_hold).max(1);
     if elapsed_ms < hold {
         return (
@@ -559,10 +567,20 @@ mod tests {
     }
 
     #[test]
-    fn a_brief_line_shortens_its_holds() {
-        // 2 s line: 0.5 s hold, 1.1 s moving, 0.4 s at the end.
-        assert_eq!(paced_offset(499, 2000, 100.0).0, 0.0);
-        assert_eq!(paced_offset(500 + 550, 2000, 100.0).0, 50.0);
+    fn a_line_with_room_for_the_holds_keeps_them() {
+        // 5 s line: the holds take exactly half; 1.5 s hold, 2.5 s moving,
+        // 1 s at the end.
+        assert_eq!(paced_offset(1499, 5000, 100.0).0, 0.0);
+        assert_eq!(paced_offset(1500 + 1250, 5000, 100.0).0, 50.0);
+        assert_eq!(paced_offset(4000, 5000, 100.0), (100.0, None));
+    }
+
+    #[test]
+    fn a_brief_line_shortens_its_holds_in_proportion() {
+        // 2 s line: the holds get 1 s between them, 0.6 s and 0.4 s;
+        // 1 s moving.
+        assert_eq!(paced_offset(599, 2000, 100.0).0, 0.0);
+        assert_eq!(paced_offset(600 + 500, 2000, 100.0).0, 50.0);
         assert_eq!(paced_offset(1600, 2000, 100.0).0, 100.0);
     }
 
