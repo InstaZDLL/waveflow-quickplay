@@ -46,8 +46,13 @@ const DRAIN_TIMEOUT: Duration = Duration::from_millis(500);
 /// Longest a finished track waits for its tail to play out.
 const TAIL_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// FIR length for the DSD → PCM converter: the desktop default.
-const DSD_TAPS: usize = 64;
+/// FIR length for the DSD → PCM converter: the desktop's default (its
+/// "standard" DSD precision; 1024 and 2048 are its higher settings). A
+/// 64-tap filter, one output period long, lets the DSD shaping noise
+/// through as a steady hiss: measured on a DSD64 file at 44.1 kHz, the
+/// 15–22 kHz band sits at −85 dB with 64 taps and at −115 dB with 256,
+/// for a fifth more decoding time.
+const DSD_TAPS: usize = 256;
 
 /// Open `path` through waveflow-core's player decoding. The library
 /// identifiers of that call (track id, duration, source) are the desktop's
@@ -152,6 +157,8 @@ fn decoder_loop(
                     }
                 };
                 if start_ms > 0 {
+                    // Nothing decoded yet, so the resampler is still the
+                    // pass-through placeholder: no history to drop.
                     stream.seek_ms(start_ms);
                     stream.reset_decoder();
                 }
@@ -193,6 +200,9 @@ struct Session<'a> {
     shared: &'a SharedPlayback,
     events: &'a EventSink,
     stream: &'a mut ActiveStream,
+    /// The output's rate and channel count, what the stream decodes to.
+    dst_rate: u32,
+    dst_channels: usize,
     /// Decoded samples not yet pushed into the ring.
     out: Vec<f32>,
     /// The stream has ended; its tail is still playing out of the ring.
@@ -216,6 +226,25 @@ impl Session<'_> {
             .unwrap_or_else(|e| e.into_inner());
         self.spectrum
             .feed(&self.out[before..], channels, rate, ahead, &mut queue);
+    }
+
+    /// Move the stream to `ms` and start it afresh there: decoder state,
+    /// and the resampler too. Core's `reset_decoder` leaves the resampler
+    /// alone, and the chunk it still holds plus its filter history would
+    /// otherwise play the old position for a few milliseconds first.
+    /// Rebuilding it also restarts the count that cuts the tail at the end
+    /// of the track at the right length.
+    fn seek_to(&mut self, ms: u64) {
+        self.stream.seek_ms(ms);
+        self.stream.reset_decoder();
+        if let Err(message) = self
+            .stream
+            .rebuild_resampler(1.0, self.dst_rate, self.dst_channels)
+        {
+            // The same resampler was built once already; keeping the old
+            // one costs at most one chunk of the previous position.
+            tracing::warn!(%message, ms, "resampler not rebuilt after the seek");
+        }
     }
 
     /// Apply one command. `Some(exit)` ends the track for the caller.
@@ -249,8 +278,7 @@ impl Session<'_> {
                 drain_ring(self.producer, self.shared);
                 self.out.clear();
                 self.spectrum.discard_pending();
-                self.stream.seek_ms(ms);
-                self.stream.reset_decoder();
+                self.seek_to(ms);
                 self.shared.restart_clock(ms);
                 self.shared
                     .paused_output
@@ -288,6 +316,8 @@ fn play_track(
         shared,
         events,
         stream,
+        dst_rate,
+        dst_channels,
         out: Vec::with_capacity(16_384),
         eof: None,
         spectrum: SpectrumAnalyzer::new(),
