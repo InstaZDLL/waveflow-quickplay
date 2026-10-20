@@ -857,7 +857,7 @@ impl QuickPlayApp {
             always_on_top: self.settings.always_on_top,
             has_track: current.is_some(),
             has_prev: self.queue.prev_index().is_some(),
-            has_next: self.queue.next_index().is_some(),
+            has_next: self.queue.has_next(),
             cover: self
                 .cover
                 .as_ref()

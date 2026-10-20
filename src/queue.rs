@@ -119,30 +119,43 @@ impl Queue {
             .all(|e| self.played.contains(&e.id))
     }
 
+    /// Playable rows other than the current one.
+    fn others(&self) -> impl Iterator<Item = usize> + '_ {
+        let current_id = self.current().map(|e| e.id);
+        (0..self.entries.len())
+            .filter(move |i| self.playable(*i) && Some(self.entries[*i].id) != current_id)
+    }
+
+    /// Those of [`Self::others`] not yet played in this shuffle round.
+    fn unplayed(&self) -> impl Iterator<Item = usize> + '_ {
+        self.others()
+            .filter(|i| !self.played.contains(&self.entries[*i].id))
+    }
+
+    /// Whether [`Self::draw`] would find a row, without drawing one: the
+    /// view asks every frame.
+    fn can_draw(&self) -> bool {
+        self.unplayed().next().is_some()
+            || (self.repeat == Repeat::All
+                && (self.others().next().is_some()
+                    || self.current.is_some_and(|i| self.playable(i))))
+    }
+
     /// A random playable row other than the current one, not yet played in
     /// this round; when the round is complete, any other row if the queue
     /// repeats, none otherwise.
     fn draw(&self) -> Option<usize> {
-        let current_id = self.current().map(|e| e.id);
-        let others: Vec<usize> = (0..self.entries.len())
-            .filter(|i| self.playable(*i) && Some(self.entries[*i].id) != current_id)
-            .collect();
-        let unplayed: Vec<usize> = others
-            .iter()
-            .copied()
-            .filter(|i| !self.played.contains(&self.entries[*i].id))
-            .collect();
-        let pool = if !unplayed.is_empty() {
-            unplayed
-        } else if self.repeat == Repeat::All {
-            if others.is_empty() {
+        let mut pool: Vec<usize> = self.unplayed().collect();
+        if pool.is_empty() {
+            if self.repeat != Repeat::All {
+                return None;
+            }
+            pool = self.others().collect();
+            if pool.is_empty() {
                 // Alone in the queue: it comes again.
                 return self.current.filter(|i| self.playable(*i));
             }
-            others
-        } else {
-            return None;
-        };
+        }
         // xorshift64*: enough to pick a row.
         let mut x = self.rng.get();
         x ^= x >> 12;
@@ -184,12 +197,12 @@ impl Queue {
         if !self.played.contains(&id) {
             self.played.push(id);
         }
-        let n = self.history.len();
-        if n >= 2 && self.history[n - 2] == id {
-            // Back to the previous track: unwind rather than record.
-            self.history.pop();
-        } else if self.history.last() != Some(&id) {
-            self.history.push(id);
+        match self.history.iter().rposition(|h| *h == id) {
+            // Back to a track the history holds (Previous, or a pick from
+            // the list): unwind to it rather than record it again, so
+            // Previous keeps walking back from there.
+            Some(k) => self.history.truncate(k + 1),
+            None => self.history.push(id),
         }
     }
 
@@ -216,7 +229,9 @@ impl Queue {
         if index >= self.entries.len() {
             return false;
         }
-        self.entries.remove(index);
+        let id = self.entries.remove(index).id;
+        self.history.retain(|h| *h != id);
+        self.played.retain(|p| *p != id);
         match self.current {
             Some(c) if c == index => {
                 // The cursor keeps its position so Next plays what moved
@@ -251,6 +266,20 @@ impl Queue {
         if self.shuffle {
             return self.draw();
         }
+        self.sequential_next()
+    }
+
+    /// Whether [`Self::next_index`] would find a row. Under shuffle this
+    /// does not draw, so it can be asked every frame.
+    pub fn has_next(&self) -> bool {
+        if self.shuffle {
+            self.can_draw()
+        } else {
+            self.sequential_next().is_some()
+        }
+    }
+
+    fn sequential_next(&self) -> Option<usize> {
         let start = self.current.map_or(0, |c| c + 1);
         let after = (start..self.entries.len()).find(|i| self.playable(*i));
         match (after, self.repeat) {
@@ -390,5 +419,57 @@ mod tests {
         assert_eq!(q.prev_index(), Some(2));
         q.set_current(Some(2));
         assert_eq!(q.prev_index(), None, "nothing played before the first");
+    }
+
+    /// A track that failed or was removed after it played is skipped on
+    /// the way back, and the walk goes on past it instead of bouncing
+    /// between its two neighbours.
+    #[test]
+    fn shuffle_previous_walks_past_a_dead_track() {
+        let mut q = queue_of(4);
+        q.set_current(Some(0));
+        q.set_shuffle(true);
+        let a = q.next_index().unwrap();
+        q.set_current(Some(a));
+        let b = q.next_index().unwrap();
+        q.set_current(Some(b));
+        q.entries[a].failed = Some("nope".into());
+        assert_eq!(q.prev_index(), Some(0));
+        q.set_current(Some(0));
+        assert_eq!(q.prev_index(), None);
+
+        let mut q = queue_of(4);
+        q.set_current(Some(0));
+        q.set_shuffle(true);
+        let a = q.next_index().unwrap();
+        q.set_current(Some(a));
+        let b = q.next_index().unwrap();
+        q.set_current(Some(b));
+        let b_id = q.entries[b].id;
+        q.remove(a);
+        let b = q.entries.iter().position(|e| e.id == b_id).unwrap();
+        assert_eq!(q.current_index(), Some(b));
+        assert_eq!(q.prev_index(), Some(0));
+        q.set_current(Some(0));
+        assert_eq!(q.prev_index(), None);
+    }
+
+    #[test]
+    fn has_next_agrees_with_next_index_without_drawing() {
+        let mut q = queue_of(3);
+        q.set_current(Some(0));
+        q.set_shuffle(true);
+        assert!(q.has_next());
+        let before = q.rng.get();
+        assert!(q.has_next());
+        assert_eq!(q.rng.get(), before, "no draw");
+        for _ in 0..2 {
+            let i = q.next_index().unwrap();
+            q.set_current(Some(i));
+        }
+        assert!(!q.has_next(), "round over");
+        assert_eq!(q.next_index(), None);
+        q.set_repeat(Repeat::All);
+        assert!(q.has_next());
     }
 }
