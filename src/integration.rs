@@ -59,8 +59,15 @@ mod platform {
     use std::process::Command;
     use waveflow_core::scanner::extract::AUDIO_EXTENSIONS;
 
+    // Explorer lists a key's verbs in the order of their key names, so the
+    // names decide the menu: "Play with…" first, "Add to … playlist" under
+    // it. `Playlist` sorts after its prefix `Play`.
     const PLAY_VERB: &str = "WaveFlowQuickPlay.Play";
-    const ENQUEUE_VERB: &str = "WaveFlowQuickPlay.Enqueue";
+    const ENQUEUE_VERB: &str = "WaveFlowQuickPlay.Playlist";
+    /// The playlist verb's name up to 1.0.0, which sorted above "Play
+    /// with…". Removed by every registration and removal so an upgrade
+    /// does not leave the entry twice.
+    const LEGACY_ENQUEUE_VERB: &str = "WaveFlowQuickPlay.Enqueue";
     const APP_KEY: &str = r"HKEY_CURRENT_USER\Software\Classes\Applications\waveflow-quickplay.exe";
 
     /// `.reg` string syntax: backslashes and quotes escaped.
@@ -101,10 +108,25 @@ mod platform {
         out
     }
 
+    /// `[-key]` lines for the verb keys of earlier versions.
+    fn legacy_removals() -> String {
+        let mut s = String::new();
+        for ext in AUDIO_EXTENSIONS {
+            s.push_str(&format!(
+                "[-HKEY_CURRENT_USER\\Software\\Classes\\SystemFileAssociations\\.{ext}\\shell\\{LEGACY_ENQUEUE_VERB}]\r\n\r\n"
+            ));
+        }
+        s.push_str(&format!(
+            "[-HKEY_CURRENT_USER\\Software\\Classes\\Directory\\shell\\{LEGACY_ENQUEUE_VERB}]\r\n\r\n"
+        ));
+        s
+    }
+
     fn registration_script(exe: &std::path::Path, t: &Strings) -> String {
         let exe = exe.to_string_lossy();
         let icon = format!("\"{exe}\",0");
         let mut s = String::from("Windows Registry Editor Version 5.00\r\n\r\n");
+        s.push_str(&legacy_removals());
         for (key, label, arg, is_folder) in verb_keys(t) {
             let full = format!(r"HKEY_CURRENT_USER\Software\Classes\{key}");
             s.push_str(&format!(
@@ -148,6 +170,7 @@ mod platform {
                 "[-HKEY_CURRENT_USER\\Software\\Classes\\{key}]\r\n\r\n"
             ));
         }
+        s.push_str(&legacy_removals());
         s.push_str(&format!("[-{APP_KEY}]\r\n\r\n"));
         s
     }
@@ -274,14 +297,29 @@ mod platform {
                 r#"@="\"C:\\Program Files\\QP\\waveflow-quickplay.exe\" --enqueue \"%1\"""#
             ));
             assert!(s.contains(r"[HKEY_CURRENT_USER\Software\Classes\SystemFileAssociations\.flac\shell\WaveFlowQuickPlay.Play\command]"));
+            assert!(s.contains(r"[HKEY_CURRENT_USER\Software\Classes\SystemFileAssociations\.flac\shell\WaveFlowQuickPlay.Playlist\command]"));
             assert!(s.contains("\".dsf\"=\"\""));
+            // The 1.0.0 key goes on every registration.
+            assert!(s.contains(
+                r"[-HKEY_CURRENT_USER\Software\Classes\Directory\shell\WaveFlowQuickPlay.Enqueue]"
+            ));
             let r = removal_script();
+            assert!(r.contains(
+                r"[-HKEY_CURRENT_USER\Software\Classes\Directory\shell\WaveFlowQuickPlay.Playlist]"
+            ));
             assert!(r.contains(
                 r"[-HKEY_CURRENT_USER\Software\Classes\Directory\shell\WaveFlowQuickPlay.Enqueue]"
             ));
             assert!(
                 !r.contains(r"[-HKEY_CURRENT_USER\Software\Classes\SystemFileAssociations\.flac]")
             );
+        }
+
+        /// Explorer orders the verbs by key name: "Play with…" must sort
+        /// before "Add to … playlist".
+        #[test]
+        fn play_verb_sorts_before_the_playlist_verb() {
+            assert!(PLAY_VERB.to_ascii_lowercase() < ENQUEUE_VERB.to_ascii_lowercase());
         }
     }
 }
