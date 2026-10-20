@@ -6,7 +6,13 @@ README has the short version; this is the long one.
 ## Crates and modules
 
 ```text
-WaveFlow/src-tauri/crates/core   (waveflow-core, git dependency pinned to a WaveFlow commit)
+WaveFlow/src-tauri/crates/core   (waveflow-core, git dependency pinned to a WaveFlow commit,
+   │                              with its `playback` feature)
+   ├── playback::stream::ActiveStream open a track, decode it to interleaved f32 at the
+   │                                  output's rate and channel count, seek; DSD → PCM;
+   │                                  the container's length and the codec's name
+   ├── playback::resampler, channels  rubato FFT resampler with its end-of-track tail,
+   │                                  channel conversion (mono ↔ stereo, Lo/Ro fold-down)
    ├── audio_format::opus::codecs()   the one codec registry (symphonia + libopus)
    ├── audio_format::dsd              DSF / DFF parser, 1-bit → PCM converter, tags
    └── scanner::extract               AUDIO_EXTENSIONS, is_scannable_audio,
@@ -15,7 +21,7 @@ WaveFlow/src-tauri/crates/core   (waveflow-core, git dependency pinned to a Wave
 waveflow-quickplay
    ├── src/main.rs        CLI, single-instance hand-over, logging, eframe window
    ├── src/app.rs         QuickPlayApp: queue + engine + loader + window state, applies UI actions
-   ├── src/audio/         the playback pipeline (see below)
+   ├── src/audio/         the transport around core's decoding (see below)
    ├── src/library.rs     tags / duration / cover reads and folder scans on worker threads
    ├── src/lyrics.rs      .lrc sidecar parser, line in force at a position
    ├── src/queue.rs       the playlist model
@@ -43,17 +49,24 @@ pool, and ReplayGain / crossfade / the output pin / exclusive mode are read
 from the profile database. It cannot be instantiated without a Tauri
 runtime, which QuickPlay must not start.
 
-QuickPlay therefore carries a reduced pipeline (`src/audio/`, about 700
-lines) with the desktop's topology and invariants, on top of the desktop's
-own decoders, DSD converter and probing code from `waveflow-core`. "Powered
-by WaveFlow" is the honest description: same formats and same decoders,
-its own small transport.
+The decoding that engine wraps is not tied to Tauri, and since WaveFlow
+#922 it lives in `waveflow-core` behind the `playback` feature:
+`ActiveStream` opens a file, decodes it to interleaved `f32`, fits its
+channels to the output's and resamples it to the output's rate, with the
+desktop's handling of DSD, of FLAC files that carry stray bytes after
+their last frame, and of the resampler's tail at the end of a track.
+QuickPlay plays through exactly that code. What it carries itself is the
+transport around it (`src/audio/`, about 1 300 lines) with the desktop's
+topology and invariants: the decoder thread and its commands, the
+lock-free ring, the cpal callback, the spectrum analyser. "Powered by
+WaveFlow" is the honest description: same formats, same decoding, its own
+small transport.
 
 ## Playback pipeline
 
 ```text
 UI thread (egui)  ──AudioCmd (crossbeam)──►  decoder thread (std)  ──f32 (rtrb SPSC)──►  cpal callback
-                  ◄──EngineEvent + repaint──  symphonia / DSD → convert_channels → rubato
+                  ◄──EngineEvent + repaint──  waveflow_core::playback: decode → channels → resample
                   reads SharedPlayback atomics (position, state, volume)
 ```
 
@@ -63,13 +76,18 @@ UI thread (egui)  ──AudioCmd (crossbeam)──►  decoder thread (std)  ─
   give clean seeks and instant pause, as in the desktop engine; the callback
   tests the drain first, so a flush requested while paused still empties the
   ring.
-- Streams open through `waveflow_core::audio_format::opus::codecs()`, so
-  QuickPlay plays exactly the formats the desktop plays, Opus included.
-- The decoder skips a bounded number of undecodable packets per call and
-  resets the codec when symphonia asks for it, so a damaged frame costs a
-  blip, not the track.
-- The resampler is flushed at the end of a track and reset on a seek; mono
-  input is sent to both front channels; every cpal sample format is handled.
+- Streams open through `ActiveStream::open` with the desktop's codec
+  registry (`waveflow_core::audio_format::opus::codecs()`), so QuickPlay
+  plays exactly the formats the desktop plays, Opus included. The library
+  identifiers of that call (track id, source) stay empty; the length comes
+  from the container (`container_duration_ms`) and the codec name from the
+  registry (`codec`), spelled as the desktop's format chip spells it.
+- At the end of a track `decode_next` appends the resampler's tail, cut to
+  the track's real length, along with its `Ok(true)`; the decoder thread
+  pushes what it was handed before it acts on the end, so the last
+  fraction of a second plays and no silence is added after it. A seek
+  resets the decoder and empties the resampler (`reset_decoder`).
+- Every cpal sample format is handled in the output.
 - A track ends only once its tail has left the ring, resampler delay
   included; the UI then loads the next queue entry. State events are tagged
   with a generation and ignored until the `Loaded` event of the current

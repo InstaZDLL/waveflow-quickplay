@@ -450,6 +450,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "chardetng"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "13de944a44b5064ee5d3a5ceccc49a41bfec50f2580e66f82e87703acdb88b53"
+dependencies = [
+ "cfg-if",
+ "encoding_rs",
+ "memchr",
+]
+
+[[package]]
 name = "chrono"
 version = "0.4.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -581,6 +592,12 @@ dependencies = [
  "core-foundation",
  "libc",
 ]
+
+[[package]]
+name = "core_detect"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f8f80099a98041a3d1622845c271458a2d73e688351bf3cb999266764b81d48"
 
 [[package]]
 name = "coreaudio-rs"
@@ -998,6 +1015,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "52c8d4141cf0f60fb2f7aefaf352d3ffa5171ef0ab09731c64391801e95e48f1"
 dependencies = [
  "bytemuck",
+]
+
+[[package]]
+name = "encoding_rs"
+version = "0.8.42"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e985e0451871ad22fb8d2b6b076e2028a502a0d3950998c2c5c0a4f9b5d9679"
+dependencies = [
+ "cfg-if",
+ "core_detect",
+ "multiversion_no_op",
+ "rustversion",
+ "scopeguard",
+ "simdutf8",
 ]
 
 [[package]]
@@ -2191,6 +2222,12 @@ dependencies = [
  "num-traits",
  "pxfm",
 ]
+
+[[package]]
+name = "multiversion_no_op"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "743fb55ba31b18fb1ecef6bdc9aa2743314978ac084044301a7eee33fb99a20d"
 
 [[package]]
 name = "naga"
@@ -4703,12 +4740,14 @@ dependencies = [
 [[package]]
 name = "waveflow-core"
 version = "1.9.1"
-source = "git+https://github.com/InstaZDLL/WaveFlow?rev=75bd2b6918ef35821def921e209d483388f27d30#75bd2b6918ef35821def921e209d483388f27d30"
+source = "git+https://github.com/InstaZDLL/WaveFlow?rev=1274b65034dc60962a3c6a8dc06df67303c79c81#1274b65034dc60962a3c6a8dc06df67303c79c81"
 dependencies = [
  "anyhow",
  "async-trait",
  "blake3",
+ "chardetng",
  "chrono",
+ "encoding_rs",
  "fast_image_resize",
  "globset",
  "hex",
@@ -4722,6 +4761,7 @@ dependencies = [
  "regex",
  "reqwest",
  "resvg",
+ "rubato",
  "serde",
  "serde_json",
  "sqlx",
@@ -4731,6 +4771,7 @@ dependencies = [
  "tracing",
  "usvg",
  "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4748,10 +4789,8 @@ dependencies = [
  "realfft",
  "rfd",
  "rtrb",
- "rubato",
  "serde",
  "serde_json",
- "symphonia",
  "sys-locale",
  "tracing",
  "tracing-subscriber",
