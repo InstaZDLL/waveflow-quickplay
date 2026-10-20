@@ -4,6 +4,7 @@
 //! and polls commands between packets so pause / seek / stop stay
 //! responsive. Reports back through [`EventSink`] rather than Tauri events.
 
+use std::fs::File;
 use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -59,16 +60,40 @@ const DSD_TAPS: usize = 256;
 /// and stay empty here: the length comes from the container instead
 /// (`container_duration_ms`). No ReplayGain and no DoP, both out of
 /// QuickPlay's scope.
+///
+/// Files other than DSD go through `open_from_source` with the file
+/// itself, not through `open`: on a network share `open` first reads the
+/// whole file into memory (up to 512 MiB), and this thread would answer
+/// neither Stop nor Shutdown until the transfer ends. QuickPlay streams
+/// the file as it did before, and plays from the first packet.
 fn open_stream(path: &Path) -> Result<ActiveStream, String> {
-    ActiveStream::open(
-        path,
+    let ext = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_ascii_lowercase());
+    if matches!(ext.as_deref(), Some("dsf") | Some("dff")) {
+        // The DSD pipeline reads block by block; `open` branches to it
+        // before any pre-load.
+        return ActiveStream::open(
+            path,
+            0,
+            0,
+            String::new(),
+            None,
+            TrackGain::default(),
+            DSD_TAPS,
+            false,
+        );
+    }
+    let file = File::open(path).map_err(|e| format!("open: {e}"))?;
+    ActiveStream::open_from_source(
+        Box::new(file),
+        ext.as_deref(),
         0,
         0,
         String::new(),
         None,
         TrackGain::default(),
-        DSD_TAPS,
-        false,
     )
 }
 
@@ -200,6 +225,8 @@ struct Session<'a> {
     shared: &'a SharedPlayback,
     events: &'a EventSink,
     stream: &'a mut ActiveStream,
+    /// The load this track came from, for the events it emits.
+    generation: u64,
     /// The output's rate and channel count, what the stream decodes to.
     dst_rate: u32,
     dst_channels: usize,
@@ -233,18 +260,14 @@ impl Session<'_> {
     /// alone, and the chunk it still holds plus its filter history would
     /// otherwise play the old position for a few milliseconds first.
     /// Rebuilding it also restarts the count that cuts the tail at the end
-    /// of the track at the right length.
-    fn seek_to(&mut self, ms: u64) {
+    /// of the track at the right length. An error here leaves the stream
+    /// unfit to continue, like a decode error.
+    fn seek_to(&mut self, ms: u64) -> Result<(), String> {
         self.stream.seek_ms(ms);
         self.stream.reset_decoder();
-        if let Err(message) = self
-            .stream
+        self.stream
             .rebuild_resampler(1.0, self.dst_rate, self.dst_channels)
-        {
-            // The same resampler was built once already; keeping the old
-            // one costs at most one chunk of the previous position.
-            tracing::warn!(%message, ms, "resampler not rebuilt after the seek");
-        }
+            .map(|_| ())
     }
 
     /// Apply one command. `Some(exit)` ends the track for the caller.
@@ -278,7 +301,15 @@ impl Session<'_> {
                 drain_ring(self.producer, self.shared);
                 self.out.clear();
                 self.spectrum.discard_pending();
-                self.seek_to(ms);
+                if let Err(message) = self.seek_to(ms) {
+                    tracing::warn!(%message, ms, "seek failed");
+                    stop_playback(self.producer, self.shared, self.events);
+                    self.events.emit(EngineEvent::Error {
+                        generation: Some(self.generation),
+                        message,
+                    });
+                    return Some(Exit::Idle);
+                }
                 self.shared.restart_clock(ms);
                 self.shared
                     .paused_output
@@ -316,6 +347,7 @@ fn play_track(
         shared,
         events,
         stream,
+        generation,
         dst_rate,
         dst_channels,
         out: Vec::with_capacity(16_384),
