@@ -31,7 +31,7 @@ publish = false
 # next door; bump the `rev` to pick up core changes. For local work against
 # a WaveFlow checkout, override it from the command line:
 #   cargo build --config 'patch."https://github.com/InstaZDLL/WaveFlow".waveflow-core.path="../WaveFlow/src-tauri/crates/core"'
-waveflow-core = { git = "https://github.com/InstaZDLL/WaveFlow", rev = "1274b65034dc60962a3c6a8dc06df67303c79c81", features = [
+waveflow-core = { git = "https://github.com/InstaZDLL/WaveFlow", rev = "102df0031bef8ba44062e03337807592b3d51102", features = [
     "playback",
 ] }
 

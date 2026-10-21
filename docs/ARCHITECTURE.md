@@ -86,8 +86,11 @@ UI thread (egui)  ──AudioCmd (crossbeam)──►  decoder thread (std)  ─
   the track's real length, along with its `Ok(true)`; the decoder thread
   pushes what it was handed before it acts on the end, so the last
   fraction of a second plays and no silence is added after it. A seek
-  resets the decoder and rebuilds the resampler, so nothing from the old
+  resets the decoder, resampler included, so nothing from the old
   position plays first.
+- A file on a network share is read ahead on a thread of core's own: the
+  open waits for the header only, and Stop or a seek during the transfer
+  are answered at once.
 - DSD is converted with the desktop's default 256-tap filter; fewer taps
   let the DSD shaping noise through as a steady hiss.
 - Every cpal sample format is handled in the output.
