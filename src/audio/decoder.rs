@@ -62,8 +62,7 @@ const DSD_TAPS: usize = 256;
 ///
 /// A file on a network share is read ahead on a thread of core's own
 /// (`playback::read_ahead`): the open waits for the header only, the
-/// decoder reads as the transfer goes, and dropping the stream stops it,
-/// so this thread answers Stop and Shutdown while a track loads.
+/// decoder reads as the transfer goes, and dropping the stream stops it.
 fn open_stream(path: &Path) -> Result<ActiveStream, String> {
     ActiveStream::open(
         path,
@@ -75,6 +74,61 @@ fn open_stream(path: &Path) -> Result<ActiveStream, String> {
         DSD_TAPS,
         false,
     )
+}
+
+/// How an open that is under way ended.
+// One value per open, consumed at once: not worth a box for the stream.
+#[allow(clippy::large_enum_variant)]
+enum Opened {
+    Stream(Result<ActiveStream, String>),
+    /// Stop, a new load or a shutdown arrived first; the open goes on
+    /// alone and its stream is dropped when it is done, which also ends
+    /// a network transfer it started.
+    Abandoned(Option<AudioCmd>),
+}
+
+/// Open `path` on a helper thread while this one keeps answering
+/// commands: a stalled network share or a disk spinning up can hold an
+/// open for seconds, and Stop or Shutdown must not wait for it. Pause,
+/// Resume and Seek that arrive meanwhile are folded into how the track
+/// starts (`autoplay`, `start_ms`), as they would have taken effect right
+/// after the open before.
+fn open_while_listening(
+    cmd_rx: &Receiver<AudioCmd>,
+    shared: &SharedPlayback,
+    path: &Path,
+    autoplay: &mut bool,
+    start_ms: &mut u64,
+) -> Opened {
+    let (tx, rx) = crossbeam_channel::bounded(1);
+    let open_path = path.to_path_buf();
+    let spawned = std::thread::Builder::new()
+        .name("quickplay-audio-open".into())
+        .spawn(move || {
+            let _ = tx.send(open_stream(&open_path));
+        });
+    if let Err(err) = spawned {
+        return Opened::Stream(Err(format!("open thread: {err}")));
+    }
+    loop {
+        crossbeam_channel::select! {
+            recv(rx) -> result => {
+                return Opened::Stream(
+                    result.unwrap_or_else(|_| Err("the open thread quit".into())),
+                );
+            }
+            recv(cmd_rx) -> cmd => match cmd {
+                Ok(AudioCmd::SetVolume(v)) => shared.set_volume(v),
+                Ok(AudioCmd::Pause) => *autoplay = false,
+                Ok(AudioCmd::Resume) => *autoplay = true,
+                Ok(AudioCmd::Seek(ms)) => *start_ms = ms,
+                Ok(cmd @ (AudioCmd::Stop | AudioCmd::Load { .. } | AudioCmd::Shutdown)) => {
+                    return Opened::Abandoned(Some(cmd));
+                }
+                Err(_) => return Opened::Abandoned(None),
+            },
+        }
+    }
 }
 
 pub fn spawn_decoder_thread(
@@ -137,8 +191,8 @@ fn decoder_loop(
             AudioCmd::Load {
                 generation,
                 path,
-                start_ms,
-                autoplay,
+                mut start_ms,
+                mut autoplay,
             } => {
                 shared.set_state(PlayerState::Loading);
                 // Flush whatever the previous track left in the ring. The
@@ -148,9 +202,20 @@ fn decoder_loop(
                 shared.drain_silent.store(true, Ordering::Release);
                 shared.paused_output.store(false, Ordering::Release);
                 drain_ring(producer, shared);
-                let mut stream = match open_stream(&path) {
-                    Ok(s) => s,
-                    Err(message) => {
+                let opened =
+                    open_while_listening(cmd_rx, shared, &path, &mut autoplay, &mut start_ms);
+                let mut stream = match opened {
+                    Opened::Abandoned(next) => {
+                        shared.drain_silent.store(false, Ordering::Release);
+                        match next {
+                            Some(AudioCmd::Stop) => stop_playback(producer, shared, events),
+                            Some(load @ AudioCmd::Load { .. }) => pending = Some(load),
+                            _ => return,
+                        }
+                        continue;
+                    }
+                    Opened::Stream(Ok(s)) => s,
+                    Opened::Stream(Err(message)) => {
                         tracing::warn!(path = %path.display(), %message, "track failed to open");
                         shared.drain_silent.store(false, Ordering::Release);
                         set_state(shared, events, PlayerState::Idle);
