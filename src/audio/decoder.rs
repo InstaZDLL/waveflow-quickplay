@@ -4,7 +4,6 @@
 //! and polls commands between packets so pause / seek / stop stay
 //! responsive. Reports back through [`EventSink`] rather than Tauri events.
 
-use std::fs::File;
 use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -61,40 +60,84 @@ const DSD_TAPS: usize = 256;
 /// (`container_duration_ms`). No ReplayGain and no DoP, both out of
 /// QuickPlay's scope.
 ///
-/// Files other than DSD go through `open_from_source` with the file
-/// itself, not through `open`: on a network share `open` first reads the
-/// whole file into memory (up to 512 MiB), and this thread would answer
-/// neither Stop nor Shutdown until the transfer ends. QuickPlay streams
-/// the file as it did before, and plays from the first packet.
+/// A file on a network share is read ahead on a thread of core's own
+/// (`playback::read_ahead`): the open waits for the header only, the
+/// decoder reads as the transfer goes, and dropping the stream stops it.
 fn open_stream(path: &Path) -> Result<ActiveStream, String> {
-    let ext = path
-        .extension()
-        .and_then(|s| s.to_str())
-        .map(|s| s.to_ascii_lowercase());
-    if matches!(ext.as_deref(), Some("dsf") | Some("dff")) {
-        // The DSD pipeline reads block by block; `open` branches to it
-        // before any pre-load.
-        return ActiveStream::open(
-            path,
-            0,
-            0,
-            String::new(),
-            None,
-            TrackGain::default(),
-            DSD_TAPS,
-            false,
-        );
-    }
-    let file = File::open(path).map_err(|e| format!("open: {e}"))?;
-    ActiveStream::open_from_source(
-        Box::new(file),
-        ext.as_deref(),
+    ActiveStream::open(
+        path,
         0,
         0,
         String::new(),
         None,
         TrackGain::default(),
+        DSD_TAPS,
+        false,
     )
+}
+
+/// A position kept within the track: at most its last millisecond when
+/// the container gives a length, as asked otherwise.
+fn clamp_to_track(ms: u64, duration_ms: Option<u64>) -> u64 {
+    match duration_ms {
+        Some(d) if d > 0 => ms.min(d.saturating_sub(1)),
+        _ => ms,
+    }
+}
+
+/// How an open that is under way ended.
+// One value per open, consumed at once: not worth a box for the stream.
+#[allow(clippy::large_enum_variant)]
+enum Opened {
+    Stream(Result<ActiveStream, String>),
+    /// Stop, a new load or a shutdown arrived first; the open goes on
+    /// alone and its stream is dropped when it is done, which also ends
+    /// a network transfer it started.
+    Abandoned(Option<AudioCmd>),
+}
+
+/// Open `path` on a helper thread while this one keeps answering
+/// commands: a stalled network share or a disk spinning up can hold an
+/// open for seconds, and Stop or Shutdown must not wait for it. Pause,
+/// Resume and Seek that arrive meanwhile are folded into how the track
+/// starts (`autoplay`, `start_ms`), as they would have taken effect right
+/// after the open before.
+fn open_while_listening(
+    cmd_rx: &Receiver<AudioCmd>,
+    shared: &SharedPlayback,
+    path: &Path,
+    autoplay: &mut bool,
+    start_ms: &mut u64,
+) -> Opened {
+    let (tx, rx) = crossbeam_channel::bounded(1);
+    let open_path = path.to_path_buf();
+    let spawned = std::thread::Builder::new()
+        .name("quickplay-audio-open".into())
+        .spawn(move || {
+            let _ = tx.send(open_stream(&open_path));
+        });
+    if let Err(err) = spawned {
+        return Opened::Stream(Err(format!("open thread: {err}")));
+    }
+    loop {
+        crossbeam_channel::select! {
+            recv(rx) -> result => {
+                return Opened::Stream(
+                    result.unwrap_or_else(|_| Err("the open thread quit".into())),
+                );
+            }
+            recv(cmd_rx) -> cmd => match cmd {
+                Ok(AudioCmd::SetVolume(v)) => shared.set_volume(v),
+                Ok(AudioCmd::Pause) => *autoplay = false,
+                Ok(AudioCmd::Resume) => *autoplay = true,
+                Ok(AudioCmd::Seek(ms)) => *start_ms = ms,
+                Ok(cmd @ (AudioCmd::Stop | AudioCmd::Load { .. } | AudioCmd::Shutdown)) => {
+                    return Opened::Abandoned(Some(cmd));
+                }
+                Err(_) => return Opened::Abandoned(None),
+            },
+        }
+    }
 }
 
 pub fn spawn_decoder_thread(
@@ -157,8 +200,8 @@ fn decoder_loop(
             AudioCmd::Load {
                 generation,
                 path,
-                start_ms,
-                autoplay,
+                mut start_ms,
+                mut autoplay,
             } => {
                 shared.set_state(PlayerState::Loading);
                 // Flush whatever the previous track left in the ring. The
@@ -168,9 +211,20 @@ fn decoder_loop(
                 shared.drain_silent.store(true, Ordering::Release);
                 shared.paused_output.store(false, Ordering::Release);
                 drain_ring(producer, shared);
-                let mut stream = match open_stream(&path) {
-                    Ok(s) => s,
-                    Err(message) => {
+                let opened =
+                    open_while_listening(cmd_rx, shared, &path, &mut autoplay, &mut start_ms);
+                let mut stream = match opened {
+                    Opened::Abandoned(next) => {
+                        shared.drain_silent.store(false, Ordering::Release);
+                        match next {
+                            Some(AudioCmd::Stop) => stop_playback(producer, shared, events),
+                            Some(load @ AudioCmd::Load { .. }) => pending = Some(load),
+                            _ => return,
+                        }
+                        continue;
+                    }
+                    Opened::Stream(Ok(s)) => s,
+                    Opened::Stream(Err(message)) => {
                         tracing::warn!(path = %path.display(), %message, "track failed to open");
                         shared.drain_silent.store(false, Ordering::Release);
                         set_state(shared, events, PlayerState::Idle);
@@ -181,6 +235,9 @@ fn decoder_loop(
                         continue;
                     }
                 };
+                // A seek folded in during the open was measured against
+                // nothing: bound it to this track as a session seek is.
+                let start_ms = clamp_to_track(start_ms, stream.container_duration_ms);
                 if start_ms > 0 {
                     // Nothing decoded yet, so the resampler is still the
                     // pass-through placeholder: no history to drop.
@@ -225,11 +282,6 @@ struct Session<'a> {
     shared: &'a SharedPlayback,
     events: &'a EventSink,
     stream: &'a mut ActiveStream,
-    /// The load this track came from, for the events it emits.
-    generation: u64,
-    /// The output's rate and channel count, what the stream decodes to.
-    dst_rate: u32,
-    dst_channels: usize,
     /// Decoded samples not yet pushed into the ring.
     out: Vec<f32>,
     /// The stream has ended; its tail is still playing out of the ring.
@@ -255,19 +307,13 @@ impl Session<'_> {
             .feed(&self.out[before..], channels, rate, ahead, &mut queue);
     }
 
-    /// Move the stream to `ms` and start it afresh there: decoder state,
-    /// and the resampler too. Core's `reset_decoder` leaves the resampler
-    /// alone, and the chunk it still holds plus its filter history would
-    /// otherwise play the old position for a few milliseconds first.
-    /// Rebuilding it also restarts the count that cuts the tail at the end
-    /// of the track at the right length. An error here leaves the stream
-    /// unfit to continue, like a decode error.
-    fn seek_to(&mut self, ms: u64) -> Result<(), String> {
+    /// Move the stream to `ms` and start it afresh there: decoder state
+    /// and the resampler, which `reset_decoder` empties too, so nothing
+    /// from the old position plays first and the count that cuts the tail
+    /// at the end of the track restarts from here.
+    fn seek_to(&mut self, ms: u64) {
         self.stream.seek_ms(ms);
         self.stream.reset_decoder();
-        self.stream
-            .rebuild_resampler(1.0, self.dst_rate, self.dst_channels)
-            .map(|_| ())
     }
 
     /// Apply one command. `Some(exit)` ends the track for the caller.
@@ -288,10 +334,7 @@ impl Session<'_> {
                 None
             }
             AudioCmd::Seek(ms) => {
-                let ms = match self.stream.container_duration_ms {
-                    Some(d) if d > 0 => ms.min(d.saturating_sub(1)),
-                    _ => ms,
-                };
+                let ms = clamp_to_track(ms, self.stream.container_duration_ms);
                 // The callback does not pop while paused, so lift the pause
                 // for the flush and put it back after; silence first, so the
                 // samples drained are never heard.
@@ -301,15 +344,7 @@ impl Session<'_> {
                 drain_ring(self.producer, self.shared);
                 self.out.clear();
                 self.spectrum.discard_pending();
-                if let Err(message) = self.seek_to(ms) {
-                    tracing::warn!(%message, ms, "seek failed");
-                    stop_playback(self.producer, self.shared, self.events);
-                    self.events.emit(EngineEvent::Error {
-                        generation: Some(self.generation),
-                        message,
-                    });
-                    return Some(Exit::Idle);
-                }
+                self.seek_to(ms);
                 self.shared.restart_clock(ms);
                 self.shared
                     .paused_output
@@ -347,9 +382,6 @@ fn play_track(
         shared,
         events,
         stream,
-        generation,
-        dst_rate,
-        dst_channels,
         out: Vec::with_capacity(16_384),
         eof: None,
         spectrum: SpectrumAnalyzer::new(),
@@ -460,5 +492,18 @@ fn drain_ring(producer: &Producer<f32>, shared: &SharedPlayback) {
     let start = Instant::now();
     while producer.slots() < RING_CAPACITY && start.elapsed() < DRAIN_TIMEOUT {
         std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::clamp_to_track;
+
+    #[test]
+    fn a_position_stays_within_the_track() {
+        assert_eq!(clamp_to_track(5_000, Some(3_000)), 2_999);
+        assert_eq!(clamp_to_track(1_000, Some(3_000)), 1_000);
+        assert_eq!(clamp_to_track(5_000, Some(0)), 5_000, "no length known");
+        assert_eq!(clamp_to_track(5_000, None), 5_000);
     }
 }
