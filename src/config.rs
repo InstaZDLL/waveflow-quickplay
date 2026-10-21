@@ -10,6 +10,30 @@ use serde::{Deserialize, Serialize};
 pub const COMPACT_WIDTH: f32 = 420.0;
 pub const MIN_WIDTH: f32 = 320.0;
 
+/// What happens when the queue runs out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Repeat {
+    /// Stop after the last track.
+    #[default]
+    Off,
+    /// Start the queue over.
+    All,
+    /// Play the current track again.
+    One,
+}
+
+impl Repeat {
+    /// The next mode when the button is pressed: off → all → one → off.
+    pub fn cycled(self) -> Self {
+        match self {
+            Repeat::Off => Repeat::All,
+            Repeat::All => Repeat::One,
+            Repeat::One => Repeat::Off,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -25,6 +49,8 @@ pub struct Settings {
     /// Interface language as a BCP 47 code (`fr`, `zh-CN`); empty to follow
     /// the system. See [`crate::i18n::Lang`].
     pub language: String,
+    pub repeat: Repeat,
+    pub shuffle: bool,
 }
 
 impl Default for Settings {
@@ -39,6 +65,8 @@ impl Default for Settings {
             show_spectrum: true,
             playlist_size: [340.0, 420.0],
             language: String::new(),
+            repeat: Repeat::Off,
+            shuffle: false,
         }
     }
 }

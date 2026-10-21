@@ -12,7 +12,7 @@ use egui::{
 
 use crate::audio::{AudioCmd, AudioEngine, EngineEvent, PlayerState};
 use crate::capture::Capture;
-use crate::config::{Settings, MIN_WIDTH};
+use crate::config::{Repeat, Settings, MIN_WIDTH};
 use crate::i18n::{fill, Lang, Strings};
 use crate::ipc;
 use crate::library::{self, Loader, LoaderEvent};
@@ -140,8 +140,11 @@ impl QuickPlayApp {
         let notify_ctx = ctx.clone();
         let notify: Arc<dyn Fn() + Send + Sync> = Arc::new(move || notify_ctx.request_repaint());
         let lang = Lang::resolve(&settings.language);
+        let mut queue = Queue::default();
+        queue.set_repeat(settings.repeat);
+        queue.set_shuffle(settings.shuffle);
         let mut app = Self {
-            queue: Queue::default(),
+            queue,
             engine: None,
             loader: Loader::new(notify),
             ctx,
@@ -267,13 +270,36 @@ impl QuickPlayApp {
         }
     }
 
+    /// Play row `index`: the cursor moves on to it (Next, a track's end,
+    /// a pick from the list, a skipped failure).
     fn play_index(&mut self, index: usize, start_ms: u64, autoplay: bool) {
+        self.play_index_from(index, start_ms, autoplay, false);
+    }
+
+    /// Play the current track again from `start_ms` (its end under "repeat
+    /// one", Play after the end, a seek after the end, Previous in the
+    /// first seconds). The cursor does not move, so neither the shuffle
+    /// history nor the round changes: a round that was over stays over.
+    fn restart_current(&mut self, start_ms: u64) {
+        if let Some(i) = self.queue.current_index() {
+            self.play_index_from(i, start_ms, true, true);
+        }
+    }
+
+    /// `back`: the cursor goes back to `index` (Previous, or the current
+    /// track again), unwinding the shuffle history to it instead of
+    /// recording it again.
+    fn play_index_from(&mut self, index: usize, start_ms: u64, autoplay: bool, back: bool) {
         let Some(entry) = self.queue.get(index) else {
             return;
         };
         let (id, path) = (entry.id, entry.path.clone());
         let meta_duration = entry.duration_ms();
-        self.queue.set_current(Some(index));
+        if back {
+            self.queue.set_current_back(index);
+        } else {
+            self.queue.set_current(Some(index));
+        }
         self.selected = Some(index);
         self.generation += 1;
         self.playing_id = Some(id);
@@ -303,6 +329,16 @@ impl QuickPlayApp {
         self.loader.request_cover(entry.id, entry.path.clone());
     }
 
+    /// The track played to its end: the same one again under "repeat one",
+    /// the next one otherwise. Only here; the Next button always moves on.
+    fn track_ended(&mut self) {
+        if self.queue.repeat() == Repeat::One && self.queue.current_index().is_some() {
+            self.restart_current(0);
+            return;
+        }
+        self.next();
+    }
+
     fn next(&mut self) {
         match self.queue.next_index() {
             Some(i) => self.play_index(i, 0, true),
@@ -317,11 +353,9 @@ impl QuickPlayApp {
     fn prev(&mut self) {
         let position = self.engine.as_ref().map_or(0, |e| e.shared().position_ms());
         if position > PREV_RESTART_THRESHOLD_MS || self.queue.prev_index().is_none() {
-            if let Some(i) = self.queue.current_index() {
-                self.play_index(i, 0, true);
-            }
+            self.restart_current(0);
         } else if let Some(i) = self.queue.prev_index() {
-            self.play_index(i, 0, true);
+            self.play_index_from(i, 0, true, true);
         }
     }
 
@@ -330,8 +364,8 @@ impl QuickPlayApp {
             PlayerState::Playing => self.send(AudioCmd::Pause),
             PlayerState::Paused | PlayerState::Loading => self.send(AudioCmd::Resume),
             PlayerState::Idle | PlayerState::Ended => {
-                if let Some(i) = self.queue.current_index() {
-                    self.play_index(i, 0, true);
+                if self.queue.current_index().is_some() {
+                    self.restart_current(0);
                 } else if let Some(i) = self.queue.next_index() {
                     self.play_index(i, 0, true);
                 }
@@ -349,11 +383,7 @@ impl QuickPlayApp {
                 self.send(AudioCmd::Seek(ms));
             }
             // After a natural end the decoder is idle: reload at the offset.
-            PlayerState::Ended | PlayerState::Idle => {
-                if let Some(i) = self.queue.current_index() {
-                    self.play_index(i, ms, true);
-                }
-            }
+            PlayerState::Ended | PlayerState::Idle => self.restart_current(ms),
         }
     }
 
@@ -456,7 +486,7 @@ impl QuickPlayApp {
                 }
                 EngineEvent::Ended { generation } if generation == self.generation => {
                     self.state = PlayerState::Ended;
-                    self.next();
+                    self.track_ended();
                 }
                 EngineEvent::Ended { .. } => {}
                 EngineEvent::Error {
@@ -737,6 +767,16 @@ impl QuickPlayApp {
                 }
             }
             Action::Clear => self.clear(),
+            Action::CycleRepeat => {
+                self.settings.repeat = self.settings.repeat.cycled();
+                self.queue.set_repeat(self.settings.repeat);
+                self.settings.save();
+            }
+            Action::ToggleShuffle => {
+                self.settings.shuffle = !self.settings.shuffle;
+                self.queue.set_shuffle(self.settings.shuffle);
+                self.settings.save();
+            }
             Action::Stop => {
                 self.send(AudioCmd::Stop);
                 self.state = PlayerState::Idle;
@@ -836,7 +876,7 @@ impl QuickPlayApp {
             always_on_top: self.settings.always_on_top,
             has_track: current.is_some(),
             has_prev: self.queue.prev_index().is_some(),
-            has_next: self.queue.next_index().is_some(),
+            has_next: self.queue.has_next(),
             cover: self
                 .cover
                 .as_ref()
@@ -1257,6 +1297,12 @@ fn collect_shortcuts(ctx: &egui::Context, snap: ShortcutSnapshot, out: &mut Vec<
         }
         if i.consume_key(Modifiers::NONE, Key::T) {
             out.push(Action::TogglePin);
+        }
+        if i.consume_key(Modifiers::NONE, Key::R) {
+            out.push(Action::CycleRepeat);
+        }
+        if i.consume_key(Modifiers::NONE, Key::H) {
+            out.push(Action::ToggleShuffle);
         }
         if i.consume_key(Modifiers::COMMAND, Key::O) {
             out.push(Action::OpenFiles);

@@ -47,6 +47,9 @@ pub enum Action {
     Remove(usize),
     RemoveSelected,
     Clear,
+    /// Repeat off → all → one → off.
+    CycleRepeat,
+    ToggleShuffle,
     /// Show or hide the settings page in place of the controls.
     ToggleSettings,
     /// A language code from the picker; empty means "follow the system".

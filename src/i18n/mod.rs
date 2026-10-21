@@ -176,6 +176,11 @@ pub struct Strings {
     pub tip_add_files: &'static str,
     pub tip_remove_selected: &'static str,
     pub tip_clear_playlist: &'static str,
+    /// The repeat button, one per mode it is in.
+    pub tip_repeat_off: &'static str,
+    pub tip_repeat_all: &'static str,
+    pub tip_repeat_one: &'static str,
+    pub tip_shuffle: &'static str,
     /// Centre of the empty list.
     pub playlist_drop_hint: &'static str,
     /// Context menu of a row.
