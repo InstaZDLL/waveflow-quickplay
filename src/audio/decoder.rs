@@ -76,6 +76,15 @@ fn open_stream(path: &Path) -> Result<ActiveStream, String> {
     )
 }
 
+/// A position kept within the track: at most its last millisecond when
+/// the container gives a length, as asked otherwise.
+fn clamp_to_track(ms: u64, duration_ms: Option<u64>) -> u64 {
+    match duration_ms {
+        Some(d) if d > 0 => ms.min(d.saturating_sub(1)),
+        _ => ms,
+    }
+}
+
 /// How an open that is under way ended.
 // One value per open, consumed at once: not worth a box for the stream.
 #[allow(clippy::large_enum_variant)]
@@ -226,6 +235,9 @@ fn decoder_loop(
                         continue;
                     }
                 };
+                // A seek folded in during the open was measured against
+                // nothing: bound it to this track as a session seek is.
+                let start_ms = clamp_to_track(start_ms, stream.container_duration_ms);
                 if start_ms > 0 {
                     // Nothing decoded yet, so the resampler is still the
                     // pass-through placeholder: no history to drop.
@@ -322,10 +334,7 @@ impl Session<'_> {
                 None
             }
             AudioCmd::Seek(ms) => {
-                let ms = match self.stream.container_duration_ms {
-                    Some(d) if d > 0 => ms.min(d.saturating_sub(1)),
-                    _ => ms,
-                };
+                let ms = clamp_to_track(ms, self.stream.container_duration_ms);
                 // The callback does not pop while paused, so lift the pause
                 // for the flush and put it back after; silence first, so the
                 // samples drained are never heard.
@@ -483,5 +492,18 @@ fn drain_ring(producer: &Producer<f32>, shared: &SharedPlayback) {
     let start = Instant::now();
     while producer.slots() < RING_CAPACITY && start.elapsed() < DRAIN_TIMEOUT {
         std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::clamp_to_track;
+
+    #[test]
+    fn a_position_stays_within_the_track() {
+        assert_eq!(clamp_to_track(5_000, Some(3_000)), 2_999);
+        assert_eq!(clamp_to_track(1_000, Some(3_000)), 1_000);
+        assert_eq!(clamp_to_track(5_000, Some(0)), 5_000, "no length known");
+        assert_eq!(clamp_to_track(5_000, None), 5_000);
     }
 }
