@@ -2,8 +2,8 @@
 
 Thanks for wanting to help. QuickPlay is the small player next to
 [WaveFlow](https://github.com/InstaZDLL/WaveFlow): **Rust + egui/eframe** on
-top of `waveflow-core`, the desktop app's codec and tag crate. WaveFlow's
-[CONTRIBUTING.md](https://github.com/InstaZDLL/WaveFlow/blob/main/CONTRIBUTING.md)
+top of `waveflow-core`, the desktop app's codec, tag and playback-decoding
+crate. WaveFlow's [CONTRIBUTING.md](https://github.com/InstaZDLL/WaveFlow/blob/main/CONTRIBUTING.md)
 is the canonical guide for the WaveFlow family; this file adds what is
 specific to QuickPlay.
 
@@ -42,6 +42,9 @@ cargo build --config 'patch."https://github.com/InstaZDLL/WaveFlow".waveflow-cor
 `QUICKPLAY_CAPTURE_AFTER_MS`) writes a PNG of the player window after
 start, which is how the window is checked on displays that cannot be
 grabbed from outside (GNOME on Wayland, an ssh session on macOS).
+`QUICKPLAY_WAVEFLOW=<path>` points the "Continue in WaveFlow" button at
+another WaveFlow executable, such as a development build, and skips the
+version check that otherwise hides it for WaveFlow before 2.0.0-beta.1.
 
 ## Before you open a PR
 
@@ -93,7 +96,9 @@ test checks the placeholders.
 
 Version in `Cargo.toml`, notes in `docs/releases/v<version>.md`, then a
 `v<version>` tag: `.github/workflows/release.yml` builds the signed Windows
-installer, the `.deb` and the AppImage and publishes the GitHub release.
+installer, the `.deb`, the `.rpm`, the AppImage and the macOS disk image
+(a universal app signed ad hoc, `packaging/macos/bundle.sh`) and publishes
+the GitHub release.
 Only the maintainers tag.
 
 ## Reporting bugs and security issues

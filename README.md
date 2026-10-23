@@ -8,12 +8,12 @@
 <p align="center">
   <strong>Double-click. Just listen.</strong>
   <br />
-  A small, fast, native music player for Windows and Linux — powered by WaveFlow.
+  A small, fast, native music player for Windows, Linux and macOS — powered by WaveFlow.
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.0.0-10b981?style=flat-square" alt="Version 1.0.0" />
-  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey?style=flat-square" alt="Windows and Linux" />
+  <img src="https://img.shields.io/badge/version-1.1.0-10b981?style=flat-square" alt="Version 1.1.0" />
+  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey?style=flat-square" alt="Windows, Linux and macOS" />
   <img src="https://img.shields.io/badge/opens%20in-%3C%20300%20ms-10b981?style=flat-square" alt="Opens in under 300 ms" />
   <img src="https://img.shields.io/badge/license-GPL--3.0-green?style=flat-square" alt="GPL-3.0" />
 </p>
@@ -27,7 +27,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/InstaZDLL/waveflow-quickplay/releases/latest"><img src="https://img.shields.io/badge/Download%20QuickPlay-Windows%20%C2%B7%20Linux-10b981?style=for-the-badge" alt="Download QuickPlay for Windows or Linux" /></a>
+  <a href="https://github.com/InstaZDLL/waveflow-quickplay/releases/latest"><img src="https://img.shields.io/badge/Download%20QuickPlay-Windows%20%C2%B7%20Linux%20%C2%B7%20macOS-10b981?style=for-the-badge" alt="Download QuickPlay for Windows, Linux or macOS" /></a>
 </p>
 
 <p align="center">
@@ -58,8 +58,9 @@ Download the package for your system from the [latest release](https://github.co
 
 - **Windows**: `waveflow-quickplay_<version>_x64-setup.exe`. A per-user installer, no administrator rights, that also adds *Play with WaveFlow QuickPlay* and *Add to WaveFlow QuickPlay playlist* to the right-click menu of audio files and folders, and removes them on uninstall. It is signed with WaveFlow's self-signed certificate, so SmartScreen may warn once.
 - **Linux**: a `.deb` for Debian / Ubuntu, an `.rpm` for Fedora / RHEL / openSUSE, or an `.AppImage` for any distribution (make it executable and run it). All three come with the desktop entry, so QuickPlay appears in "Open with" for audio files.
+- **macOS**: `waveflow-quickplay_<version>_macos-universal.dmg`, one app for Apple silicon and Intel Macs, macOS 11 or later. Open it and drag *WaveFlow QuickPlay* to Applications. The app is signed ad hoc, not by an Apple Developer ID, so macOS blocks the first launch: open System Settings › Privacy & Security and choose *Open Anyway* (on macOS 14 and earlier, right-click the app and choose *Open*). It is asked once.
 
-Then double-click a track, or right-click it. That is the whole setup.
+Then double-click a track, or right-click it. That is the whole setup. On macOS, drop files on the player or use its open button.
 
 <details>
 <summary>From the command line</summary>
@@ -203,6 +204,7 @@ cargo install cargo-packager cargo-generate-rpm
 cargo packager --release --formats nsis          # Windows: per-user installer
 cargo packager --release --formats deb,appimage  # Linux
 cat packaging/rpm.toml >> Cargo.toml && cargo generate-rpm   # Linux: .rpm → target/generate-rpm/
+bash packaging/macos/bundle.sh target/release/waveflow-quickplay <version> target/packager   # macOS: .app + .dmg
 ```
 
 The installers come out in `target/packager/`, the `.rpm` in
@@ -214,7 +216,7 @@ desktop entry. Releases are built by `.github/workflows/release.yml` from a
 
 ## Architecture
 
-QuickPlay is Rust + egui, under 8 000 lines including the language tables,
+QuickPlay is Rust + egui, under 9 000 lines including the language tables,
 on top of `waveflow-core`, the crate that holds WaveFlow's codec registry
 (symphonia + libopus), DSD converter, tag reader and, behind its `playback`
 feature, the decoding the desktop plays through: open a track, decode it
@@ -284,10 +286,12 @@ The working set is dominated by the OpenGL driver and the decoded cover
 
 ## Known limitations
 
-- **macOS** runs from the bare binary (checked on macOS 26 / Apple silicon:
-  playback, the docked playlist, minimize and restore from the Dock, the
-  single instance). There is no `.app` bundle or installer yet, and file
-  associations there need one; `--register` says so and does nothing.
+- **macOS** ships as an app in a disk image, signed ad hoc, so Gatekeeper
+  asks once before the first launch. It has no file associations: Finder
+  hands a file to an app through an "open documents" event that egui-winit
+  does not deliver, so double-clicking a track in Finder cannot open it in
+  QuickPlay yet. Drop files on the window, use the open dialog or the
+  command line; `--register` says so and does nothing.
 - **Wayland** does not let an application position its windows, so the
   playlist opens where the compositor puts it and does not follow the
   player there. Under XWayland and everywhere else it docks.
@@ -316,7 +320,7 @@ part agrees to the [Code of Conduct](CODE_OF_CONDUCT.md).
 | --- | --- | --- | --- |
 | `assets/fonts/Inter-Regular.ttf`, `Inter-SemiBold.ttf` | The Inter Project Authors | https://github.com/rsms/inter | OFL-1.1 (`assets/fonts/OFL-Inter.txt`) |
 | `assets/fonts/NotoSansCJKsc-Regular.otf` | Google, Adobe (Noto CJK) | https://github.com/notofonts/noto-cjk | OFL-1.1 (`assets/fonts/OFL-NotoSansCJK.txt`) |
-| `assets/icon-128.png`, `assets/icon.ico` | WaveFlow | `src-tauri/crates/app/icons/` | GPL-3.0-only (project) |
+| `assets/icon-128.png`, `assets/icon.ico`, `assets/icon.icns` | WaveFlow | `src-tauri/crates/app/icons/` | GPL-3.0-only (project) |
 
 The screenshots show *Feel Special* by TWICE, used for illustration only.
 
