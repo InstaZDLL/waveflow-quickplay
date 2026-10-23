@@ -74,7 +74,7 @@ waveflow-quickplay --register                 # file-manager integration, curren
 waveflow-quickplay --unregister
 ```
 
-A hand-copied binary (see [Build and test](#build-and-test)) needs `--register` once, and again if it moves: the registry entries and the `.desktop` file point at the executable's path. The installer does it for you.
+On Windows and Linux, a hand-copied binary (see [Build and test](#build-and-test)) needs `--register` once, and again if it moves: the registry entries and the `.desktop` file point at the executable's path. The installer does it for you.
 
 </details>
 

@@ -182,8 +182,9 @@ panics if it is replaced, and does not answer that selector, so
 `WinitApplicationDelegate` class through the Objective-C runtime before
 the loop runs (a file opened at launch arrives before the first frame),
 and hands the loop to eframe with `create_native`. The method queues the
-paths and wakes the UI; the app takes them as a `play` hand-over, so the
-queue is replaced and a multi-selection arrives in one piece.
+paths, one list per open, and wakes the UI. Each open replaces the queue
+as `play` does, without the burst rule (Explorer's one process per file);
+a multi-selection arrives in one piece.
 
 ## Continuing in WaveFlow
 

@@ -23,8 +23,10 @@ use objc2_foundation::{NSArray, NSURL};
 /// The class winit registers for its application delegate.
 const WINIT_DELEGATE: &str = "WinitApplicationDelegate";
 
-/// Paths Finder opened that the app has not taken yet.
-static OPENED: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+/// What Finder opened that the app has not taken yet, one entry per open:
+/// each is a request of its own and replaces the queue, even when two
+/// arrive before the same frame.
+static OPENED: Mutex<Vec<Vec<PathBuf>>> = Mutex::new(Vec::new());
 /// Wakes the app when Finder opens files while it is idle.
 static REPAINT: OnceLock<egui::Context> = OnceLock::new();
 
@@ -52,10 +54,7 @@ unsafe extern "C" fn open_urls(
     if paths.is_empty() {
         return;
     }
-    OPENED
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .extend(paths);
+    OPENED.lock().unwrap_or_else(|e| e.into_inner()).push(paths);
     if let Some(ctx) = REPAINT.get() {
         ctx.request_repaint();
     }
@@ -109,7 +108,8 @@ pub fn set_repaint(ctx: &egui::Context) {
     let _ = REPAINT.set(ctx.clone());
 }
 
-/// The files Finder opened since the last call.
-pub fn take_opened() -> Vec<PathBuf> {
+/// What Finder opened since the last call, one list of paths per open, in
+/// order.
+pub fn take_opened() -> Vec<Vec<PathBuf>> {
     std::mem::take(&mut *OPENED.lock().unwrap_or_else(|e| e.into_inner()))
 }

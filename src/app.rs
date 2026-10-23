@@ -1101,20 +1101,16 @@ impl QuickPlayApp {
         // double-clicking two files is slower than this.
         const BURST: Duration = Duration::from_millis(500);
         let mut got_any = false;
-        // Files opened from Finder are a `play` from a second launch.
+        // Each Finder open is one request, a multi-selection included: it
+        // replaces the queue like `play`, without the burst rule, which is
+        // for Explorer starting one process per selected file.
         #[cfg(target_os = "macos")]
-        let mut finder = Some(crate::macos::take_opened())
-            .filter(|paths| !paths.is_empty())
-            .map(|paths| ipc::Message {
-                mode: ipc::Mode::Play,
-                paths,
-            });
-        #[cfg(not(target_os = "macos"))]
-        let mut finder: Option<ipc::Message> = None;
-        while let Some(msg) = finder
-            .take()
-            .or_else(|| self.ipc.as_ref().and_then(|s| s.try_recv()))
-        {
+        for paths in crate::macos::take_opened() {
+            got_any = true;
+            self.clear();
+            self.add_paths(&paths, true);
+        }
+        while let Some(msg) = self.ipc.as_ref().and_then(|s| s.try_recv()) {
             got_any = true;
             match msg.mode {
                 ipc::Mode::Play => {
