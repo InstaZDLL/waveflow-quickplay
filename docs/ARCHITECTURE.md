@@ -166,8 +166,8 @@ installer runs both at install and uninstall time.
 
 ## Continuing in WaveFlow
 
-When WaveFlow is installed, the player shows its logo beside the artwork
-button. A press writes a `waveflow_core::handoff::Handoff` (the queue as
+When a WaveFlow that takes handoffs is installed, the player shows its
+logo beside the artwork button. A press writes a `waveflow_core::handoff::Handoff` (the queue as
 absolute paths, the current entry, the position, playing or paused) to a
 file in the temporary directory, starts `waveflow --handoff <file>`, stops
 the sound and closes. Both sides build the format from the same core
@@ -182,7 +182,16 @@ follows a folder the user picked) and then the default folders, on macOS
 `WaveFlow.app` in `/Applications` or `~/Applications`, on Linux `waveflow`
 on `PATH`. The Flatpak exports its application id instead, which is what
 keeps the button hidden there: its sandbox could not see the file.
-`QUICKPLAY_WAVEFLOW` overrides the lookup.
+
+An older WaveFlow ignores `--handoff` and opens empty, so the install's
+version must be `MIN_WAVEFLOW_HANDOFF` (2.0.0-beta.1, pre-releases
+before releases as in semver) or later. It is read from metadata, never
+by starting WaveFlow, which has no `--version` option and would open its
+window: `DisplayVersion` of the uninstall entry, else the executable's
+version resource, on Windows; `CFBundleShortVersionString` on macOS;
+`dpkg-query`, `rpm` or `pacman` on Linux. No version read, no button.
+`QUICKPLAY_WAVEFLOW` overrides the lookup and skips the check, since a
+development build reports the version of the last release cut.
 
 ## Languages
 

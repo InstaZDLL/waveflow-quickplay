@@ -109,6 +109,9 @@ pub struct QuickPlayApp {
     /// Generation whose `Loaded` event has arrived; state events before
     /// that belong to the previous track.
     loaded_generation: u64,
+    /// Where the pending load starts. Until its `Loaded` arrives, the
+    /// engine's clock still counts the previous track.
+    load_start_ms: u64,
     /// Synced lyrics of the current track, from its `.lrc` sidecar.
     lyrics: Option<Lyrics>,
     /// Test-only window capture, armed by `QUICKPLAY_CAPTURE_DIR`.
@@ -178,6 +181,7 @@ impl QuickPlayApp {
             playlist_place_pending: false,
             lyrics: None,
             loaded_generation: 0,
+            load_start_ms: 0,
             capture: Capture::from_env(),
             ipc,
             // Files given on the command line count as the first `play` of a
@@ -249,7 +253,13 @@ impl QuickPlayApp {
             .map(|e| std::path::absolute(&e.path).unwrap_or_else(|_| e.path.clone()))
             .collect();
         let index = self.queue.current_index().unwrap_or(0);
-        let position = self.engine.as_ref().map_or(0, |e| e.shared().position_ms());
+        // Before the pending load's `Loaded`, the engine's clock is still the
+        // previous track's: the new one starts where it was asked to.
+        let position = if self.loaded_generation == self.generation {
+            self.engine.as_ref().map_or(0, |e| e.shared().position_ms())
+        } else {
+            self.load_start_ms
+        };
         // Stopped or at the end: WaveFlow gets the track, from its start,
         // and waits; playing or loading: it carries on.
         let (position_ms, playing) = match self.state {
@@ -361,6 +371,7 @@ impl QuickPlayApp {
         self.codec = None;
         self.seek_preview = None;
         self.state = PlayerState::Loading;
+        self.load_start_ms = start_ms;
         self.lyrics = Lyrics::load_for(&path);
         let generation = self.generation;
         self.send(AudioCmd::Load {
