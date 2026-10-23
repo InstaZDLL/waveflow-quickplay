@@ -47,6 +47,8 @@ pub const STRINGS: Strings = Strings {
     status_scanning: "正在扫描文件夹…",
     status_no_audio_files: "未找到支持的音频文件",
     status_cannot_play: "无法播放：{e}",
+    status_cannot_open_waveflow: "无法打开 WaveFlow：{e}",
+    tip_open_in_waveflow: "在 WaveFlow 中继续播放",
 
     // ── File dialog ────────────────────────────────────────────────────
     dialog_open_title: "打开音频文件",

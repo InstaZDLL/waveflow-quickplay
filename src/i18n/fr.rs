@@ -47,6 +47,8 @@ pub const STRINGS: Strings = Strings {
     status_scanning: "Analyse des dossiers…",
     status_no_audio_files: "Aucun fichier audio compatible",
     status_cannot_play: "Lecture impossible\u{a0}: {e}",
+    status_cannot_open_waveflow: "Impossible d’ouvrir WaveFlow\u{a0}: {e}",
+    tip_open_in_waveflow: "Continuer dans WaveFlow",
 
     // ── File dialog ────────────────────────────────────────────────────
     dialog_open_title: "Ouvrir des fichiers audio",

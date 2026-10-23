@@ -23,6 +23,7 @@ use crate::ui::{
     player, playlist, settings as settings_page, theme, Action, PlayerView, COMPACT_HEIGHT,
     CONTROLS_HEIGHT, TITLE_HEIGHT,
 };
+use crate::waveflow;
 
 pub const APP_ID: &str = "app.waveflow.quickplay";
 pub const MAIN_TITLE: &str = "WaveFlow QuickPlay";
@@ -108,6 +109,9 @@ pub struct QuickPlayApp {
     /// Generation whose `Loaded` event has arrived; state events before
     /// that belong to the previous track.
     loaded_generation: u64,
+    /// Where the pending load starts. Until its `Loaded` arrives, the
+    /// engine's clock still counts the previous track.
+    load_start_ms: u64,
     /// Synced lyrics of the current track, from its `.lrc` sidecar.
     lyrics: Option<Lyrics>,
     /// Test-only window capture, armed by `QUICKPLAY_CAPTURE_DIR`.
@@ -123,6 +127,9 @@ pub struct QuickPlayApp {
     /// The last frame taken, which the bars ease toward.
     spectrum_target: Vec<f32>,
     spectrum_tick: Instant,
+    /// WaveFlow's executable, looked for in the background: the player
+    /// offers to carry on there when it is installed.
+    waveflow: waveflow::Finder,
 }
 
 impl QuickPlayApp {
@@ -174,6 +181,7 @@ impl QuickPlayApp {
             playlist_place_pending: false,
             lyrics: None,
             loaded_generation: 0,
+            load_start_ms: 0,
             capture: Capture::from_env(),
             ipc,
             // Files given on the command line count as the first `play` of a
@@ -183,6 +191,10 @@ impl QuickPlayApp {
             spectrum: vec![0.0; crate::audio::spectrum::BAND_COUNT],
             spectrum_target: vec![0.0; crate::audio::spectrum::BAND_COUNT],
             spectrum_tick: Instant::now(),
+            waveflow: waveflow::Finder::spawn({
+                let ctx = cc.egui_ctx.clone();
+                move || ctx.request_repaint()
+            }),
             settings,
         };
         if !files.is_empty() {
@@ -223,6 +235,58 @@ impl QuickPlayApp {
     fn send(&mut self, cmd: AudioCmd) {
         if let Some(engine) = self.ensure_engine() {
             engine.send(cmd);
+        }
+    }
+
+    /// Carry on in WaveFlow: hand over the queue, the track, the position
+    /// and whether it was playing, then stop and close. On failure the
+    /// player stays as it was and says why.
+    fn open_in_waveflow(&mut self) {
+        let Some(exe) = self.waveflow.exe().map(PathBuf::from) else {
+            return;
+        };
+        if self.queue.is_empty() {
+            return;
+        }
+        let paths = (0..self.queue.len())
+            .filter_map(|i| self.queue.get(i))
+            .map(|e| std::path::absolute(&e.path).unwrap_or_else(|_| e.path.clone()))
+            .collect();
+        let index = self.queue.current_index().unwrap_or(0);
+        // Before the pending load's `Loaded`, the engine's clock is still the
+        // previous track's: the new one starts where it was asked to.
+        let position = if self.loaded_generation == self.generation {
+            self.engine.as_ref().map_or(0, |e| e.shared().position_ms())
+        } else {
+            self.load_start_ms
+        };
+        // Stopped or at the end: WaveFlow gets the track, from its start,
+        // and waits; playing or loading: it carries on.
+        let (position_ms, playing) = match self.state {
+            PlayerState::Playing | PlayerState::Loading => (position, true),
+            PlayerState::Paused => (position, false),
+            PlayerState::Idle | PlayerState::Ended => (0, false),
+        };
+        let handoff = waveflow_core::handoff::Handoff::new(paths, index, position_ms, playing);
+        match waveflow::hand_over(&exe, &handoff) {
+            Ok(()) => {
+                tracing::info!(exe = %exe.display(), index, position_ms, playing, "handed over to WaveFlow");
+                // Silence at once rather than when the window has gone, so
+                // the two players are not heard together.
+                if let Some(engine) = &self.engine {
+                    engine.send(AudioCmd::Stop);
+                }
+                self.ctx
+                    .send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Close);
+            }
+            Err(err) => {
+                tracing::error!(%err, exe = %exe.display(), "handing over to WaveFlow failed");
+                let message = fill(
+                    self.t().status_cannot_open_waveflow,
+                    &[("e", &err.to_string())],
+                );
+                self.set_status(message);
+            }
         }
     }
 
@@ -307,6 +371,7 @@ impl QuickPlayApp {
         self.codec = None;
         self.seek_preview = None;
         self.state = PlayerState::Loading;
+        self.load_start_ms = start_ms;
         self.lyrics = Lyrics::load_for(&path);
         let generation = self.generation;
         self.send(AudioCmd::Load {
@@ -791,6 +856,7 @@ impl QuickPlayApp {
                 self.set_playlist_minimized(true);
             }
             Action::CloseWindow => ctx.send_viewport_cmd(ViewportCommand::Close),
+            Action::OpenInWaveFlow => self.open_in_waveflow(),
             Action::ToggleSettings => self.settings_open = !self.settings_open,
             Action::SetLanguage(code) => {
                 self.settings.language =
@@ -877,6 +943,7 @@ impl QuickPlayApp {
             has_track: current.is_some(),
             has_prev: self.queue.prev_index().is_some(),
             has_next: self.queue.has_next(),
+            can_hand_over: self.waveflow.exe().is_some(),
             cover: self
                 .cover
                 .as_ref()

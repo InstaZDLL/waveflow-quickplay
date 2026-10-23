@@ -194,6 +194,11 @@ pub struct Strings {
     pub status_no_audio_files: &'static str,
     /// `{e}` is the decoder's message.
     pub status_cannot_play: &'static str,
+    /// `{e}` is why WaveFlow could not be started.
+    pub status_cannot_open_waveflow: &'static str,
+    /// The button that hands playback over to WaveFlow, shown when it is
+    /// installed.
+    pub tip_open_in_waveflow: &'static str,
 
     // ── File dialog ────────────────────────────────────────────────────
     pub dialog_open_title: &'static str,
@@ -298,6 +303,11 @@ mod tests {
                     "status_cannot_play",
                     en.status_cannot_play,
                     t.status_cannot_play,
+                ),
+                (
+                    "status_cannot_open_waveflow",
+                    en.status_cannot_open_waveflow,
+                    t.status_cannot_open_waveflow,
                 ),
                 ("language_system", en.language_system, t.language_system),
                 ("about_version", en.about_version, t.about_version),

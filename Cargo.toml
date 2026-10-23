@@ -31,7 +31,7 @@ publish = false
 # next door; bump the `rev` to pick up core changes. For local work against
 # a WaveFlow checkout, override it from the command line:
 #   cargo build --config 'patch."https://github.com/InstaZDLL/WaveFlow".waveflow-core.path="../WaveFlow/src-tauri/crates/core"'
-waveflow-core = { git = "https://github.com/InstaZDLL/WaveFlow", rev = "102df0031bef8ba44062e03337807592b3d51102", features = [
+waveflow-core = { git = "https://github.com/InstaZDLL/WaveFlow", rev = "605dd881eea01b8fe67b6f1e99534775b1fdeff2", features = [
     "playback",
 ] }
 
@@ -91,7 +91,8 @@ sys-locale = "0.3"
 
 [target.'cfg(windows)'.dependencies]
 # Owner relationship between the playlist window and the player (one taskbar
-# button, minimized together); same version winit already pulls.
+# button, minimized together), the registry, and the version resource of an
+# installed WaveFlow; same version winit already pulls.
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_System_Threading",
@@ -99,6 +100,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_UI_Shell",
     "Win32_System_Console",
     "Win32_System_Registry",
+    "Win32_Storage_FileSystem",
 ] }
 
 [build-dependencies]
