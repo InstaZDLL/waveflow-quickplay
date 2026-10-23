@@ -66,7 +66,7 @@ pub const STRINGS: Strings = Strings {
     about_source: "源代码与发布版本",
 
     // ── File-manager integration ───────────────────────────────────────
-    action_play_with: "使用 WaveFlow QuickPlay 播放",
-    action_add_to_playlist: "添加到 WaveFlow QuickPlay 播放列表",
+    action_play_with: "使用 QuickPlay 播放",
+    action_add_to_playlist: "添加到 QuickPlay 播放列表",
     desktop_comment: "快速播放音频文件",
 };

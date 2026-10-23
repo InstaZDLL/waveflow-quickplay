@@ -85,7 +85,7 @@ body:
       description: Numbered steps a stranger could follow on a fresh install.
       placeholder: |
         1. Install QuickPlay 1.1.0 with the Windows installer.
-        2. Right-click a 24-bit FLAC → "Play with WaveFlow QuickPlay".
+        2. Right-click a 24-bit FLAC → "Play with QuickPlay".
         3. Observe the status line.
     validations:
       required: true

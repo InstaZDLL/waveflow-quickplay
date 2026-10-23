@@ -291,7 +291,7 @@ mod platform {
                 std::path::Path::new(r"C:\Program Files\QP\waveflow-quickplay.exe"),
                 Lang::Fr.strings(),
             );
-            assert!(s.contains("@=\"Lire avec WaveFlow QuickPlay\""));
+            assert!(s.contains("@=\"Lire avec QuickPlay\""));
             assert!(s.starts_with("Windows Registry Editor Version 5.00\r\n"));
             assert!(s.contains(r#"@="\"C:\\Program Files\\QP\\waveflow-quickplay.exe\" \"%1\"""#));
             assert!(s.contains(

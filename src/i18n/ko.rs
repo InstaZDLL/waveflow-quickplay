@@ -66,7 +66,7 @@ pub const STRINGS: Strings = Strings {
     about_source: "소스 코드 및 릴리스",
 
     // ── File-manager integration ───────────────────────────────────────
-    action_play_with: "WaveFlow QuickPlay로 재생",
-    action_add_to_playlist: "WaveFlow QuickPlay 재생목록에 추가",
+    action_play_with: "QuickPlay로 재생",
+    action_add_to_playlist: "QuickPlay 재생목록에 추가",
     desktop_comment: "오디오 파일을 빠르게 재생합니다",
 };

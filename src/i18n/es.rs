@@ -66,7 +66,7 @@ pub const STRINGS: Strings = Strings {
     about_source: "Código fuente y versiones",
 
     // ── File-manager integration ───────────────────────────────────────
-    action_play_with: "Reproducir con WaveFlow QuickPlay",
-    action_add_to_playlist: "Añadir a la lista de WaveFlow QuickPlay",
+    action_play_with: "Reproducir con QuickPlay",
+    action_add_to_playlist: "Añadir a la lista de QuickPlay",
     desktop_comment: "Reproduce archivos de audio al instante",
 };

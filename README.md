@@ -56,7 +56,7 @@
 
 Download the package for your system from the [latest release](https://github.com/InstaZDLL/waveflow-quickplay/releases/latest):
 
-- **Windows**: `waveflow-quickplay_<version>_x64-setup.exe`. A per-user installer, no administrator rights, that also adds *Play with WaveFlow QuickPlay* and *Add to WaveFlow QuickPlay playlist* to the right-click menu of audio files and folders, and removes them on uninstall. It is signed with WaveFlow's self-signed certificate, so SmartScreen may warn once.
+- **Windows**: `waveflow-quickplay_<version>_x64-setup.exe`. A per-user installer, no administrator rights, that also adds *Play with QuickPlay* and *Add to QuickPlay playlist* to the right-click menu of audio files and folders, and removes them on uninstall. It is signed with WaveFlow's self-signed certificate, so SmartScreen may warn once.
 - **Linux**: a `.deb` for Debian / Ubuntu, an `.rpm` for Fedora / RHEL / openSUSE, or an `.AppImage` for any distribution (make it executable and run it). All three come with the desktop entry, so QuickPlay appears in "Open with" for audio files.
 - **macOS**: `waveflow-quickplay_<version>_macos-universal.dmg`, one app for Apple silicon and Intel Macs, macOS 11 or later. Open it and drag *WaveFlow QuickPlay* to Applications. The app is signed ad hoc, not by an Apple Developer ID, so macOS blocks the first launch: open System Settings › Privacy & Security and choose *Open Anyway* (on macOS 14 and earlier, right-click the app and choose *Open*). This is asked on the first launch of each version you download: every release is signed anew.
 
@@ -128,7 +128,7 @@ They are complementary, not two sizes of the same thing: QuickPlay deliberately 
 ### 🖱️ From the file manager
 
 - **One instance**: a second launch hands its files to the open player and exits. Plain launch replaces the queue and plays, `--enqueue` appends; a multi-selection that Explorer starts as one process per file is merged.
-- `--register` adds *Play with WaveFlow QuickPlay* and *Add to WaveFlow QuickPlay playlist* to the context menu of every audio extension and of folders, plus an "Open with" entry, for the current user and without administrator rights. On Linux it writes a `.desktop` entry with the audio MIME types. `--unregister` removes it all.
+- `--register` adds *Play with QuickPlay* and *Add to QuickPlay playlist* to the context menu of every audio extension and of folders, plus an "Open with" entry, for the current user and without administrator rights. On Linux it writes a `.desktop` entry with the audio MIME types. `--unregister` removes it all.
 - The default handler for the extensions is left to you (Settings › Default apps, or `xdg-mime default app.waveflow.quickplay.desktop audio/flac`).
 - **macOS**: the app declares the audio formats it plays, so once it is in Applications Finder lists it under *Open With* for them, a multi-selection included. To make it the default player for a format, select a file, *Get Info › Open with › WaveFlow QuickPlay › Change All*. Finder has no per-app menu entries, so there is no *Add to playlist* there.
 
