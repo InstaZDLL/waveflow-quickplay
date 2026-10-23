@@ -28,6 +28,11 @@ use crate::waveflow;
 pub const APP_ID: &str = "app.waveflow.quickplay";
 pub const MAIN_TITLE: &str = "WaveFlow QuickPlay";
 pub const PLAYLIST_TITLE: &str = "Playlist · WaveFlow QuickPlay";
+/// The name painted in the player's title bar. The logo beside it already
+/// says WaveFlow and the about block gives the full name, so the bar keeps
+/// the room; the OS title stays [`MAIN_TITLE`], which the playlist uses to
+/// find the player.
+const BAR_TITLE: &str = "QuickPlay";
 /// A playlist that lands within this distance of where the player sent it
 /// is our own move arriving, not the user dragging it.
 const DOCK_TOLERANCE: f32 = 2.0;
@@ -1253,7 +1258,7 @@ impl eframe::App for QuickPlayApp {
                 match widgets::title_bar(
                     ui,
                     t,
-                    MAIN_TITLE,
+                    BAR_TITLE,
                     subtitle.as_deref(),
                     Some(view.always_on_top),
                     true,
