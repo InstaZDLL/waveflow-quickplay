@@ -231,6 +231,8 @@ impl QuickPlayApp {
                         std::sync::atomic::Ordering::Relaxed,
                     );
                     tracing::info!(device = ?engine.device_name(), "audio engine started");
+                    // A new engine counts its xruns from zero.
+                    self.xruns_logged = 0;
                     self.engine = Some(engine);
                 }
                 Err(err) => {
