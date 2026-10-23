@@ -103,6 +103,7 @@ They are complementary, not two sizes of the same thing: QuickPlay deliberately 
 - **Instant pause, clean seeks**, no clicks or pops: the audio thread never waits on the interface.
 - **Auto-advance** with the track's tail played out; broken files are skipped and flagged in the playlist.
 - **Spectrum** timed to the output clock, so the bars follow what you hear.
+- **Continue in WaveFlow**: when WaveFlow Desktop is installed, the button with its logo hands the queue, the track, the position and the play or pause state over to it, and QuickPlay closes. WaveFlow picks up at the same spot, from its library when the files are in it.
 
 ### 🖼️ Two sizes, one window
 
@@ -139,7 +140,7 @@ They are complementary, not two sizes of the same thing: QuickPlay deliberately 
 
 - Inter and Noto Sans CJK are embedded: Japanese, Korean and Chinese titles, and the interface in those languages, render the same on every machine.
 - Preferences live in their own file, `<config dir>/waveflow-quickplay/settings.json`, never read by the desktop app.
-- `RUST_LOG=debug` turns the log up; `QUICKPLAY_CAPTURE_DIR=<dir>` writes a PNG of the player window after start, for displays that cannot be grabbed from outside such as GNOME on Wayland.
+- `RUST_LOG=debug` turns the log up; `QUICKPLAY_CAPTURE_DIR=<dir>` writes a PNG of the player window after start, for displays that cannot be grabbed from outside such as GNOME on Wayland. `QUICKPLAY_WAVEFLOW=<path>` points the WaveFlow button at another executable, such as a development build.
 
 ## Screenshots
 
@@ -299,6 +300,7 @@ The working set is dominated by the OpenGL driver and the decoded cover
 - The transport (decoder thread, ring, callback) is QuickPlay's own; the
   decoding is shared with the desktop through `waveflow-core`, and a fix
   made there reaches QuickPlay when the pinned `rev` is bumped.
+- **Continue in WaveFlow** needs a WaveFlow that takes the handoff (WaveFlow #942, after 1.9.7); an older one opens without the queue. The Flatpak build cannot take it: its sandbox has its own temporary folder and only reads the Music folder, so the button stays hidden when only the Flatpak is installed.
 
 ## Contributing
 

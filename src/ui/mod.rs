@@ -54,6 +54,8 @@ pub enum Action {
     ToggleSettings,
     /// A language code from the picker; empty means "follow the system".
     SetLanguage(String),
+    /// Hand the queue and the position over to WaveFlow, then close.
+    OpenInWaveFlow,
 }
 
 /// Read-only snapshot of what the player pane shows.
@@ -86,6 +88,8 @@ pub struct PlayerView<'a> {
     pub has_track: bool,
     pub has_prev: bool,
     pub has_next: bool,
+    /// WaveFlow is installed and can take the playback over.
+    pub can_hand_over: bool,
     pub cover: Option<&'a TextureHandle>,
     pub status: Option<&'a str>,
     /// The interface language's strings.

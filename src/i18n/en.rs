@@ -47,6 +47,8 @@ pub const STRINGS: Strings = Strings {
     status_scanning: "Scanning folders…",
     status_no_audio_files: "No supported audio files",
     status_cannot_play: "Cannot play: {e}",
+    status_cannot_open_waveflow: "Cannot open WaveFlow: {e}",
+    tip_open_in_waveflow: "Continue in WaveFlow",
 
     // ── File dialog ────────────────────────────────────────────────────
     dialog_open_title: "Open audio files",

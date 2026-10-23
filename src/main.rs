@@ -24,6 +24,7 @@ mod lyrics;
 mod platform;
 mod queue;
 mod ui;
+mod waveflow;
 
 use std::path::PathBuf;
 

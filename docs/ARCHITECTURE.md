@@ -15,6 +15,7 @@ WaveFlow/src-tauri/crates/core   (waveflow-core, git dependency pinned to a Wave
    │                                  channel conversion (mono ↔ stereo, Lo/Ro fold-down)
    ├── audio_format::opus::codecs()   the one codec registry (symphonia + libopus)
    ├── audio_format::dsd              DSF / DFF parser, 1-bit → PCM converter, tags
+   ├── handoff                        the file QuickPlay hands its queue and position over in
    └── scanner::extract               AUDIO_EXTENSIONS, is_scannable_audio,
                                       read_tagged_file, probe_playable_stream, file_type_label
 
@@ -28,6 +29,7 @@ waveflow-quickplay
    ├── src/config.rs      settings.json
    ├── src/i18n/          one strings table per language, system-language detection
    ├── src/ipc.rs         single instance: local socket, play / enqueue hand-over
+   ├── src/waveflow.rs    finds WaveFlow, hands the playback over to it (core's `handoff`)
    ├── src/integration.rs --register / --unregister (registry verbs, .desktop file)
    ├── src/platform.rs    Windows: owner link between the playlist window and the player
    ├── src/ui/            theme, painted icons, widgets, player pane, playlist window, settings page
@@ -161,6 +163,26 @@ registry labels when the running executable is the registered one (checked
 against the "Open with" command, so a development build never redirects
 the installed menu). `--unregister` removes everything. The Windows
 installer runs both at install and uninstall time.
+
+## Continuing in WaveFlow
+
+When WaveFlow is installed, the player shows its logo beside the artwork
+button. A press writes a `waveflow_core::handoff::Handoff` (the queue as
+absolute paths, the current entry, the position, playing or paused) to a
+file in the temporary directory, starts `waveflow --handoff <file>`, stops
+the sound and closes. Both sides build the format from the same core
+module; WaveFlow removes the file once read, and a WaveFlow already
+running receives the arguments through its single-instance plugin. If the
+start fails, the file is removed and the player stays as it was with the
+error in its status line.
+
+WaveFlow is looked for once, on a thread, so the first frame does not wait
+for it: on Windows the uninstall entry named "WaveFlow" (NSIS or MSI, which
+follows a folder the user picked) and then the default folders, on macOS
+`WaveFlow.app` in `/Applications` or `~/Applications`, on Linux `waveflow`
+on `PATH`. The Flatpak exports its application id instead, which is what
+keeps the button hidden there: its sandbox could not see the file.
+`QUICKPLAY_WAVEFLOW` overrides the lookup.
 
 ## Languages
 

@@ -251,6 +251,19 @@ pub fn controls(ui: &mut Ui, view: &PlayerView<'_>, actions: &mut Vec<Action>) {
             {
                 actions.push(Action::ToggleExpanded);
             }
+            if view.can_hand_over
+                && bar_button(
+                    ui,
+                    Icon::Logo,
+                    BAR_BUTTON,
+                    view.t.tip_open_in_waveflow,
+                    view.has_track || view.has_next,
+                    false,
+                )
+                .clicked()
+            {
+                actions.push(Action::OpenInWaveFlow);
+            }
             ui.add_space(6.0);
             let time = match duration {
                 Some(d) => format!("{} / {}", format_time(shown_ms), format_time(d)),

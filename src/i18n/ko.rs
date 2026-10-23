@@ -47,6 +47,8 @@ pub const STRINGS: Strings = Strings {
     status_scanning: "폴더 검색 중…",
     status_no_audio_files: "지원되는 오디오 파일 없음",
     status_cannot_play: "재생할 수 없음: {e}",
+    status_cannot_open_waveflow: "WaveFlow를 열 수 없음: {e}",
+    tip_open_in_waveflow: "WaveFlow에서 계속 듣기",
 
     // ── File dialog ────────────────────────────────────────────────────
     dialog_open_title: "오디오 파일 열기",

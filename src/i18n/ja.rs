@@ -47,6 +47,8 @@ pub const STRINGS: Strings = Strings {
     status_scanning: "フォルダーをスキャン中…",
     status_no_audio_files: "対応するオーディオファイルがありません",
     status_cannot_play: "再生できません：{e}",
+    status_cannot_open_waveflow: "WaveFlow を開けません：{e}",
+    tip_open_in_waveflow: "WaveFlow で続ける",
 
     // ── File dialog ────────────────────────────────────────────────────
     dialog_open_title: "オーディオファイルを開く",
