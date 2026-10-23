@@ -479,11 +479,15 @@ mod platform {
     }
 }
 
-/// `2.0.0-1` → `2.0.0`: pacman appends the package release after a dash.
+/// `2.0.0-1` → `2.0.0`: dpkg and pacman append the package revision after
+/// the last dash. A revision starts with a digit (`1`, `1+b1`,
+/// `0ubuntu1`), a pre-release label with a letter (`beta.1`), so
+/// `2.0.0-beta.1` is left whole and `2.0.0-alpha.1` does not become a
+/// release.
 #[cfg_attr(not(all(unix, not(target_os = "macos"))), allow(dead_code))]
 fn strip_package_release(version: &str) -> &str {
     match version.rsplit_once('-') {
-        Some((head, release)) if release.chars().all(|c| c.is_ascii_digit()) => head,
+        Some((head, release)) if release.starts_with(|c: char| c.is_ascii_digit()) => head,
         _ => version,
     }
 }
@@ -531,6 +535,14 @@ mod tests {
         assert!(takes_handoff(strip_package_release("2.0.0-beta.1-1")));
         assert!(takes_handoff(strip_package_release("2.0.0-beta.1")));
         assert!(!takes_handoff(strip_package_release("1.9.7-1")));
+        // Revisions with letters after their first digit: binNMU, Ubuntu.
+        assert_eq!(strip_package_release("2.0.0-1+b1"), "2.0.0");
+        assert_eq!(strip_package_release("2.0.0-0ubuntu1"), "2.0.0");
+        assert!(takes_handoff(strip_package_release("2.0.0-1+b1")));
+        assert!(!takes_handoff(strip_package_release("1.9.7-1+b1")));
+        // A label is not a revision: an alpha stays an alpha.
+        assert_eq!(strip_package_release("2.0.0-alpha.1"), "2.0.0-alpha.1");
+        assert!(!takes_handoff(strip_package_release("2.0.0-alpha.1")));
     }
 
     #[test]
