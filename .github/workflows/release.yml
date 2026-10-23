@@ -1,14 +1,14 @@
 # Builds the installers for a version tag (`v1.0.0`) and publishes them as a
 # GitHub release: a per-user NSIS installer for Windows, a .deb, an .rpm and
-# an AppImage for Linux, with SHA-256 checksums and the notes from
-# docs/releases/<tag>.md. Nothing is built unless the tag matches Cargo.toml
-# and the tests pass.
+# an AppImage for Linux, a universal disk image for macOS, with SHA-256
+# checksums and the notes from docs/releases/<tag>.md. Nothing is built
+# unless the tag matches Cargo.toml and the tests pass.
 #
 # It can also be run by hand from `main` for an existing tag (Actions ›
 # Release › Run workflow), with the workflow definition of `main` and the
 # sources of the tag: that is how a package format added after a release
-# gets attached to it. `linux_only` skips the Windows job so the signed
-# installer already published is left untouched; files that are rebuilt
+# gets attached to it. `linux_only` skips the Windows and macOS jobs so the
+# signed builds already published are left untouched; files that are rebuilt
 # replace their namesake on the release.
 name: Release
 
@@ -220,12 +220,78 @@ jobs:
             target/packager/SHA256SUMS-linux.txt
           if-no-files-found: error
 
+  macos:
+    name: macOS disk image
+    needs: version
+    if: ${{ !inputs.linux_only }}
+    runs-on: macos-latest
+    timeout-minutes: 90
+    env:
+      # The oldest macOS the binary and the bundle's Info.plist accept.
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          persist-credentials: false
+      # The bundle definition comes from the workflow's own ref, as the
+      # Linux packaging does, so a manual run can attach it to an older tag.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          path: workflow-ref
+          sparse-checkout: |
+            packaging
+            assets
+          persist-credentials: false
+      - run: |
+          cp -r workflow-ref/packaging/. packaging/
+          cp workflow-ref/assets/icon.icns assets/icon.icns
+      - run: rustup show active-toolchain
+      - run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - run: cargo test --locked
+      # One binary for Apple silicon and Intel Macs.
+      - name: Universal binary
+        run: |
+          cargo build --release --locked --target aarch64-apple-darwin
+          cargo build --release --locked --target x86_64-apple-darwin
+          mkdir -p target/universal
+          lipo -create -output target/universal/waveflow-quickplay \
+            target/aarch64-apple-darwin/release/waveflow-quickplay \
+            target/x86_64-apple-darwin/release/waveflow-quickplay
+          lipo -info target/universal/waveflow-quickplay
+      # Signed ad hoc, as WaveFlow Desktop's macOS build is: sealed, with a
+      # stable identity, but with no Apple Developer ID behind it, so
+      # Gatekeeper asks once before the first launch.
+      - name: App bundle and disk image
+        run: |
+          version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          mkdir -p target/packager
+          bash packaging/macos/bundle.sh target/universal/waveflow-quickplay "$version" target/packager
+          app="target/packager/WaveFlow QuickPlay.app"
+          codesign --display --verbose=2 "$app" 2>&1 | grep -q 'Signature=adhoc'
+          lipo -info "$app/Contents/MacOS/waveflow-quickplay" | grep -q 'x86_64 arm64'
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")" = "$version"
+      - name: Checksums
+        run: |
+          cd target/packager
+          shasum -a 256 *.dmg > SHA256SUMS-macos.txt
+          cat SHA256SUMS-macos.txt
+      - uses: actions/upload-artifact@v7
+        with:
+          name: macos
+          path: |
+            target/packager/*.dmg
+            target/packager/SHA256SUMS-macos.txt
+          if-no-files-found: error
+
   publish:
     name: GitHub release
-    needs: [windows, linux]
-    # Runs when every job that ran succeeded; `windows` may have been
-    # skipped by `linux_only`.
-    if: ${{ always() && needs.linux.result == 'success' && (needs.windows.result == 'success' || needs.windows.result == 'skipped') }}
+    needs: [windows, linux, macos]
+    # Runs when every job that ran succeeded; `windows` and `macos` may
+    # have been skipped by `linux_only`.
+    if: ${{ always() && needs.linux.result == 'success' && (needs.windows.result == 'success' || needs.windows.result == 'skipped') && (needs.macos.result == 'success' || needs.macos.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:

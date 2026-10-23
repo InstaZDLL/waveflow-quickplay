@@ -8,8 +8,9 @@
 //!   choice in Settings › Default apps.
 //! - Linux: a `.desktop` file with the audio MIME types and an "Add to
 //!   playlist" action, plus the icon, under `~/.local/share`.
-//! - macOS: file associations need an app bundle; not done from a bare
-//!   binary.
+//! - macOS: no file associations. Finder hands a file to an app with an
+//!   "open documents" event, which egui-winit does not deliver, so the
+//!   bundle declares no document types rather than open an empty player.
 //!
 //! Both directions are idempotent and print what they did.
 
@@ -436,7 +437,7 @@ mod platform {
 
     pub fn register(_exe: &std::path::Path, _t: &Strings) -> io::Result<String> {
         Err(io::Error::other(
-            "file associations on this platform need an application bundle; not available from a bare binary.",
+            "no file associations on this platform: Finder opens files through an event QuickPlay does not receive yet. Drop files on the window or use the open dialog.",
         ))
     }
 

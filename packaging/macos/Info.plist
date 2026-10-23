@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The bundle's Info.plist; packaging/macos/bundle.sh fills in @VERSION@.
+     No CFBundleDocumentTypes: egui-winit does not deliver the "open
+     documents" event Finder sends, so a file opened from Finder would land
+     in an empty player. Files come from the command line, a drop on the
+     window or the open dialog. -->
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>WaveFlow QuickPlay</string>
+	<key>CFBundleName</key>
+	<string>WaveFlow QuickPlay</string>
+	<key>CFBundleExecutable</key>
+	<string>waveflow-quickplay</string>
+	<key>CFBundleIconFile</key>
+	<string>icon.icns</string>
+	<key>CFBundleIdentifier</key>
+	<string>app.waveflow.quickplay</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>@VERSION@</string>
+	<key>CFBundleVersion</key>
+	<string>@VERSION@</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.music</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>11.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright © 2026 InstaZDLL. GPL-3.0-only.</string>
+</dict>
+</plist>
