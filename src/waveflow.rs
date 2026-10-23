@@ -451,9 +451,11 @@ mod platform {
     }
 
     fn package_version() -> Option<String> {
-        // Debian and apt: the package is `wave-flow`.
+        // Debian and apt: the package is `wave-flow`. A Debian revision
+        // (`2.0.0-1`) would otherwise read as a pre-release.
         run("dpkg-query", &["-W", "-f=${Version}", "wave-flow"])
-            // Fedora and COPR.
+            .map(|v| super::strip_package_release(&v).to_string())
+            // Fedora and COPR: `%{VERSION}` carries no release.
             .or_else(|| run("rpm", &["-q", "--qf", "%{VERSION}", "waveflow"]))
             // AUR: `waveflow-bin 2.0.0-1`, the version then the package
             // release.
@@ -522,6 +524,13 @@ mod tests {
         assert_eq!(strip_package_release("2.0.0-1"), "2.0.0");
         assert_eq!(strip_package_release("2.0.0beta.1-2"), "2.0.0beta.1");
         assert_eq!(strip_package_release("1.9.7"), "1.9.7");
+        // Debian revisions: a stable release with one must still qualify,
+        // and a pre-release keeps its own label.
+        assert!(!takes_handoff("2.0.0-1"));
+        assert!(takes_handoff(strip_package_release("2.0.0-1")));
+        assert!(takes_handoff(strip_package_release("2.0.0-beta.1-1")));
+        assert!(takes_handoff(strip_package_release("2.0.0-beta.1")));
+        assert!(!takes_handoff(strip_package_release("1.9.7-1")));
     }
 
     #[test]
