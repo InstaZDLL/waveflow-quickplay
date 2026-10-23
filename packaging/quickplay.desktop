@@ -18,12 +18,12 @@ StartupWMClass=app.waveflow.quickplay
 Actions=Enqueue;
 
 [Desktop Action Enqueue]
-Name=Add to WaveFlow QuickPlay playlist
-Name[fr]=Ajouter à la liste de lecture de WaveFlow QuickPlay
-Name[de]=Zur WaveFlow QuickPlay-Wiedergabeliste hinzufügen
-Name[es]=Añadir a la lista de WaveFlow QuickPlay
-Name[it]=Aggiungi alla playlist di WaveFlow QuickPlay
-Name[zh_CN]=添加到 WaveFlow QuickPlay 播放列表
-Name[ja]=WaveFlow QuickPlay のプレイリストに追加
-Name[ko]=WaveFlow QuickPlay 재생목록에 추가
+Name=Add to QuickPlay playlist
+Name[fr]=Ajouter à la liste de lecture de QuickPlay
+Name[de]=Zur QuickPlay-Wiedergabeliste hinzufügen
+Name[es]=Añadir a la lista de QuickPlay
+Name[it]=Aggiungi alla playlist di QuickPlay
+Name[zh_CN]=添加到 QuickPlay 播放列表
+Name[ja]=QuickPlay のプレイリストに追加
+Name[ko]=QuickPlay 재생목록에 추가
 Exec={{exec}} --enqueue %F

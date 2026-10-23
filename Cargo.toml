@@ -1,6 +1,6 @@
 [package]
 name = "waveflow-quickplay"
-version = "1.0.0"
+version = "1.1.0"
 description = "WaveFlow QuickPlay — a standalone, lightweight egui/eframe audio player built on WaveFlow's Rust audio infrastructure."
 authors = ["InstaZDLL <github.105mh@8shield.net>"]
 edition = "2021"
@@ -101,6 +101,20 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Console",
     "Win32_System_Registry",
     "Win32_Storage_FileSystem",
+] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Files opened from Finder arrive as `application:openURLs:` on the
+# application delegate (src/macos.rs): the event loop is built here so the
+# method can be added to winit's delegate before it starts, with the winit
+# and objc2 versions eframe already pulls.
+winit = { version = "0.30", default-features = false }
+objc2 = "0.5"
+objc2-foundation = { version = "0.2", features = [
+    "NSArray",
+    "NSEnumerator",
+    "NSString",
+    "NSURL",
 ] }
 
 [build-dependencies]

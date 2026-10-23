@@ -242,6 +242,8 @@ pub enum LoaderEvent {
     Scanned {
         paths: Vec<PathBuf>,
         autoplay: bool,
+        /// The `generation` the scan was requested with, handed back as is.
+        generation: u64,
     },
 }
 
@@ -311,13 +313,20 @@ impl Loader {
     /// Expands files and folders on a thread of its own: a dropped library
     /// root can hold tens of thousands of entries, and the stats would
     /// freeze the window if done on the UI thread.
-    pub fn request_scan(&self, inputs: Vec<PathBuf>, autoplay: bool) {
+    /// `generation` comes back with the result, so the caller can tell a
+    /// scan it has since given up on.
+    pub fn request_scan(&self, inputs: Vec<PathBuf>, autoplay: bool, generation: u64) {
         let (tx, notify) = (self.tx.clone(), self.notify.clone());
         let spawned = std::thread::Builder::new()
             .name("quickplay-scan".into())
             .spawn(move || {
                 let paths = collect_audio_paths(&inputs);
-                if tx.send(LoaderEvent::Scanned { paths, autoplay }).is_ok() {
+                let event = LoaderEvent::Scanned {
+                    paths,
+                    autoplay,
+                    generation,
+                };
+                if tx.send(event).is_ok() {
                     notify();
                 }
             });

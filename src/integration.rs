@@ -8,8 +8,9 @@
 //!   choice in Settings › Default apps.
 //! - Linux: a `.desktop` file with the audio MIME types and an "Add to
 //!   playlist" action, plus the icon, under `~/.local/share`.
-//! - macOS: file associations need an app bundle; not done from a bare
-//!   binary.
+//! - macOS: nothing to write. The app bundle declares the audio types in
+//!   its Info.plist, so Finder offers it under "Open With" once it is in
+//!   Applications, and the files arrive through src/macos.rs.
 //!
 //! Both directions are idempotent and print what they did.
 
@@ -290,7 +291,7 @@ mod platform {
                 std::path::Path::new(r"C:\Program Files\QP\waveflow-quickplay.exe"),
                 Lang::Fr.strings(),
             );
-            assert!(s.contains("@=\"Lire avec WaveFlow QuickPlay\""));
+            assert!(s.contains("@=\"Lire avec QuickPlay\""));
             assert!(s.starts_with("Windows Registry Editor Version 5.00\r\n"));
             assert!(s.contains(r#"@="\"C:\\Program Files\\QP\\waveflow-quickplay.exe\" \"%1\"""#));
             assert!(s.contains(
@@ -434,12 +435,27 @@ mod platform {
         false
     }
 
+    #[cfg(target_os = "macos")]
+    pub fn register(_exe: &std::path::Path, _t: &Strings) -> io::Result<String> {
+        Ok("nothing to register on macOS: the app declares the audio formats itself, so Finder offers it under Open With once WaveFlow QuickPlay is in Applications.".into())
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn unregister() -> io::Result<String> {
+        Ok(
+            "nothing to remove on macOS: delete the app from Applications and Finder forgets it."
+                .into(),
+        )
+    }
+
+    #[cfg(not(target_os = "macos"))]
     pub fn register(_exe: &std::path::Path, _t: &Strings) -> io::Result<String> {
         Err(io::Error::other(
-            "file associations on this platform need an application bundle; not available from a bare binary.",
+            "file-manager integration is not available on this platform.",
         ))
     }
 
+    #[cfg(not(target_os = "macos"))]
     pub fn unregister() -> io::Result<String> {
         Err(io::Error::other("nothing to remove on this platform."))
     }

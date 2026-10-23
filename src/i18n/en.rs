@@ -66,7 +66,7 @@ pub const STRINGS: Strings = Strings {
     about_source: "Source code and releases",
 
     // ── File-manager integration ───────────────────────────────────────
-    action_play_with: "Play with WaveFlow QuickPlay",
-    action_add_to_playlist: "Add to WaveFlow QuickPlay playlist",
+    action_play_with: "Play with QuickPlay",
+    action_add_to_playlist: "Add to QuickPlay playlist",
     desktop_comment: "Play audio files quickly",
 };

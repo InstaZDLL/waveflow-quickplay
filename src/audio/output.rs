@@ -166,7 +166,19 @@ fn open_stream<T>(
 where
     T: cpal::SizedSample + cpal::FromSample<f32> + Send + 'static,
 {
-    let err_fn = move |err: cpal::Error| on_error(format!("audio device error: {err}"));
+    let counters = Arc::clone(&shared);
+    let err_fn = move |err: cpal::Error| {
+        // An xrun is a glitch the stream recovers from by itself: CoreAudio
+        // reports one whenever the process stalls, as on the first launch of
+        // a new build while macOS scans it. Releasing the engine for it would
+        // stop the track; only the other errors mean the stream is gone.
+        // Counted, not logged: on ALSA this runs on the stream's thread.
+        if err.kind() == cpal::ErrorKind::Xrun {
+            counters.xruns.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+        on_error(format!("audio device error: {err}"));
+    };
     device
         .build_output_stream(
             *config,

@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The bundle's Info.plist; packaging/macos/bundle.sh fills in @VERSION@.
+     The document types put QuickPlay under "Open With" for the formats it
+     plays, ranked Alternate so it never takes over as the default player
+     unless the user picks it (Get Info, Open with, Change All). Declared by
+     extension, as WaveFlow Desktop does: DSF and DFF have no system type,
+     and an entry that lists content types has its extensions ignored. The
+     files arrive as application:openURLs: (src/macos.rs). .mp4 is left
+     out, as in WaveFlow, so QuickPlay is not offered for videos. -->
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Audio file</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>mp3</string>
+				<string>flac</string>
+				<string>wav</string>
+				<string>aiff</string>
+				<string>aif</string>
+				<string>ogg</string>
+				<string>oga</string>
+				<string>opus</string>
+				<string>m4a</string>
+				<string>aac</string>
+				<string>dsf</string>
+				<string>dff</string>
+			</array>
+		</dict>
+	</array>
+	<key>CFBundleDisplayName</key>
+	<string>WaveFlow QuickPlay</string>
+	<key>CFBundleName</key>
+	<string>WaveFlow QuickPlay</string>
+	<key>CFBundleExecutable</key>
+	<string>waveflow-quickplay</string>
+	<key>CFBundleIconFile</key>
+	<string>icon.icns</string>
+	<key>CFBundleIdentifier</key>
+	<string>app.waveflow.quickplay</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>@VERSION@</string>
+	<key>CFBundleVersion</key>
+	<string>@VERSION@</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.music</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>11.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright © 2026 InstaZDLL. GPL-3.0-only.</string>
+</dict>
+</plist>

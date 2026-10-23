@@ -4776,7 +4776,7 @@ dependencies = [
 
 [[package]]
 name = "waveflow-quickplay"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "cpal",
  "crossbeam-channel",
@@ -4786,6 +4786,8 @@ dependencies = [
  "image",
  "interprocess",
  "lofty",
+ "objc2 0.5.3",
+ "objc2-foundation 0.2.2",
  "realfft",
  "rfd",
  "rtrb",
@@ -4796,6 +4798,7 @@ dependencies = [
  "tracing-subscriber",
  "waveflow-core",
  "windows-sys 0.61.2",
+ "winit",
  "winresource",
 ]
 

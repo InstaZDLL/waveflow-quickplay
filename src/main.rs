@@ -21,6 +21,8 @@ mod integration;
 mod ipc;
 mod library;
 mod lyrics;
+#[cfg(target_os = "macos")]
+mod macos;
 mod platform;
 mod queue;
 mod ui;
@@ -188,7 +190,13 @@ fn main() -> eframe::Result {
         files = files.len(),
         "starting WaveFlow QuickPlay"
     );
-    eframe::run_native(
+    // On macOS the event loop is built by `macos::run_native`, which also
+    // receives the files Finder opens.
+    #[cfg(target_os = "macos")]
+    let run_native = macos::run_native;
+    #[cfg(not(target_os = "macos"))]
+    let run_native = eframe::run_native;
+    run_native(
         "WaveFlow QuickPlay",
         options,
         Box::new(move |cc| {

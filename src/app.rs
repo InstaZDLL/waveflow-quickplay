@@ -117,6 +117,9 @@ pub struct QuickPlayApp {
     /// Where the pending load starts. Until its `Loaded` arrives, the
     /// engine's clock still counts the previous track.
     load_start_ms: u64,
+    /// Bumped by every `clear`: a folder scan requested before it belongs to
+    /// a queue that is gone, and its result is dropped when it arrives.
+    scan_generation: u64,
     /// Synced lyrics of the current track, from its `.lrc` sidecar.
     lyrics: Option<Lyrics>,
     /// Test-only window capture, armed by `QUICKPLAY_CAPTURE_DIR`.
@@ -132,6 +135,8 @@ pub struct QuickPlayApp {
     /// The last frame taken, which the bars ease toward.
     spectrum_target: Vec<f32>,
     spectrum_tick: Instant,
+    /// Xruns already logged; the output only counts them.
+    xruns_logged: u64,
     /// WaveFlow's executable, looked for in the background: the player
     /// offers to carry on there when it is installed.
     waveflow: waveflow::Finder,
@@ -149,6 +154,8 @@ impl QuickPlayApp {
         if let Some(server) = &ipc {
             server.attach(&ctx);
         }
+        #[cfg(target_os = "macos")]
+        crate::macos::set_repaint(&ctx);
         let notify_ctx = ctx.clone();
         let notify: Arc<dyn Fn() + Send + Sync> = Arc::new(move || notify_ctx.request_repaint());
         let lang = Lang::resolve(&settings.language);
@@ -187,6 +194,7 @@ impl QuickPlayApp {
             lyrics: None,
             loaded_generation: 0,
             load_start_ms: 0,
+            scan_generation: 0,
             capture: Capture::from_env(),
             ipc,
             // Files given on the command line count as the first `play` of a
@@ -196,6 +204,7 @@ impl QuickPlayApp {
             spectrum: vec![0.0; crate::audio::spectrum::BAND_COUNT],
             spectrum_target: vec![0.0; crate::audio::spectrum::BAND_COUNT],
             spectrum_tick: Instant::now(),
+            xruns_logged: 0,
             waveflow: waveflow::Finder::spawn({
                 let ctx = cc.egui_ctx.clone();
                 move || ctx.request_repaint()
@@ -222,6 +231,8 @@ impl QuickPlayApp {
                         std::sync::atomic::Ordering::Relaxed,
                     );
                     tracing::info!(device = ?engine.device_name(), "audio engine started");
+                    // A new engine counts its xruns from zero.
+                    self.xruns_logged = 0;
                     self.engine = Some(engine);
                 }
                 Err(err) => {
@@ -313,7 +324,8 @@ impl QuickPlayApp {
             // Folders are walked on the loader's thread; the result comes
             // back as `LoaderEvent::Scanned`.
             self.set_status(self.t().status_scanning);
-            self.loader.request_scan(inputs.to_vec(), autoplay);
+            self.loader
+                .request_scan(inputs.to_vec(), autoplay, self.scan_generation);
             return;
         }
         let paths = library::collect_audio_paths(inputs);
@@ -491,6 +503,7 @@ impl QuickPlayApp {
 
     fn clear(&mut self) {
         self.queue.clear();
+        self.scan_generation += 1;
         self.selected = None;
         self.playing_id = None;
         self.duration_ms = None;
@@ -516,6 +529,16 @@ impl QuickPlayApp {
     // ── Events ──────────────────────────────────────────────────────────
 
     fn pump_engine_events(&mut self) {
+        if let Some(engine) = &self.engine {
+            let xruns = engine
+                .shared()
+                .xruns
+                .load(std::sync::atomic::Ordering::Relaxed);
+            if xruns > self.xruns_logged {
+                tracing::debug!(total = xruns, "audio xrun, the stream carried on");
+            }
+            self.xruns_logged = xruns;
+        }
         let events = match &self.engine {
             Some(engine) => engine.poll_events(),
             None => return,
@@ -601,7 +624,15 @@ impl QuickPlayApp {
     fn pump_loader_events(&mut self) {
         for event in self.loader.poll() {
             match event {
-                LoaderEvent::Scanned { paths, autoplay } => {
+                LoaderEvent::Scanned {
+                    paths,
+                    autoplay,
+                    generation,
+                } => {
+                    // Requested for a queue that has been cleared since.
+                    if generation != self.scan_generation {
+                        continue;
+                    }
                     self.status = None;
                     self.add_resolved(paths, true, autoplay);
                 }
@@ -1086,6 +1117,15 @@ impl QuickPlayApp {
         // double-clicking two files is slower than this.
         const BURST: Duration = Duration::from_millis(500);
         let mut got_any = false;
+        // Each Finder open is one request, a multi-selection included: it
+        // replaces the queue like `play`, without the burst rule, which is
+        // for Explorer starting one process per selected file.
+        #[cfg(target_os = "macos")]
+        for paths in crate::macos::take_opened() {
+            got_any = true;
+            self.clear();
+            self.add_paths(&paths, true);
+        }
         while let Some(msg) = self.ipc.as_ref().and_then(|s| s.try_recv()) {
             got_any = true;
             match msg.mode {

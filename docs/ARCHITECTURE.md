@@ -32,8 +32,10 @@ waveflow-quickplay
    ├── src/waveflow.rs    finds WaveFlow, hands the playback over to it (core's `handoff`)
    ├── src/integration.rs --register / --unregister (registry verbs, .desktop file)
    ├── src/platform.rs    Windows: owner link between the playlist window and the player
+   ├── src/macos.rs       macOS: the files Finder opens (application:openURLs:)
    ├── src/ui/            theme, painted icons, widgets, player pane, playlist window, settings page
-   └── packaging/         NSIS template and Linux desktop entry for cargo-packager
+   └── packaging/         NSIS template and Linux desktop entry for cargo-packager,
+                          the .rpm definition, the macOS Info.plist and bundle script
 ```
 
 The UI never touches the engine or the queue directly: every pane reads a
@@ -102,6 +104,9 @@ UI thread (egui)  ──AudioCmd (crossbeam)──►  decoder thread (std)  ─
   track, so a slow previous load cannot flip the state of the new one.
 - The engine is created lazily on the first load, released on exit, and
   released on an output-stream error so the next play reopens the device.
+  An xrun is not one: the stream recovers from it by itself, and macOS
+  reports one whenever the process stalls (the first launch of a new build
+  while it is scanned), so it is logged and playback carries on.
 - The spectrum analyser (`src/audio/spectrum.rs`, the desktop's FFT and band
   ladder without the Tauri emit) runs on the decoder thread and timestamps
   every frame with the output position it belongs to; the UI shows the
@@ -115,10 +120,12 @@ exclusive output, device selection, radio / remote sources, analytics.
 
 The main window has a custom title bar (drag, settings, pin, minimize,
 close) and resize edges: `with_decorations(false)` plus
-`ViewportCommand::StartDrag` / `BeginResize`. Compact mode locks the height
-to the controls block; artwork mode adds the cover above it and makes the
-window freely resizable; the settings page takes the content area in both
-modes.
+`ViewportCommand::StartDrag` / `BeginResize`. The bar reads "QuickPlay"
+beside the WaveFlow logo; the OS title stays "WaveFlow QuickPlay", which
+is how the playlist window finds the player on Windows. Compact mode
+locks the height to the controls block; artwork mode adds the cover above
+it and makes the window freely resizable; the settings page takes the
+content area in both modes.
 
 The playlist is a second native window (`show_viewport_immediate`) docked
 beside the player, as PotPlayer's playlist is:
@@ -163,6 +170,21 @@ registry labels when the running executable is the registered one (checked
 against the "Open with" command, so a development build never redirects
 the installed menu). `--unregister` removes everything. The Windows
 installer runs both at install and uninstall time.
+
+On macOS there is nothing to register: the bundle's Info.plist declares
+the audio formats (by extension, ranked Alternate, as WaveFlow Desktop
+does), which puts QuickPlay under Finder's "Open With". Finder does not
+pass the file on the command line; it sends an "open documents" Apple
+event, which AppKit hands to the application delegate as
+`application:openURLs:`. winit 0.30 installs a delegate of its own,
+panics if it is replaced, and does not answer that selector, so
+`src/macos.rs` builds the event loop itself, adds the method to winit's
+`WinitApplicationDelegate` class through the Objective-C runtime before
+the loop runs (a file opened at launch arrives before the first frame),
+and hands the loop to eframe with `create_native`. The method queues the
+paths, one list per open, and wakes the UI. Each open replaces the queue
+as `play` does, without the burst rule (Explorer's one process per file);
+a multi-selection arrives in one piece.
 
 ## Continuing in WaveFlow
 
@@ -209,5 +231,6 @@ each other on Windows.
 app write a PNG of the player window after start, for displays that cannot
 be grabbed from outside such as GNOME on Wayland or an ssh session on
 macOS. `RUST_LOG=debug` turns the log up. The repository's CI runs fmt,
-clippy and the tests on Windows and Ubuntu; releases are built from a `v*`
-tag by `.github/workflows/release.yml`.
+clippy and the tests on Windows, Ubuntu and macOS; releases are built from
+a `v*` tag by `.github/workflows/release.yml`, the macOS disk image by
+`packaging/macos/bundle.sh` around a universal binary, signed ad hoc.

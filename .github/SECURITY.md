@@ -29,7 +29,7 @@ Your report should include:
 - a clear description of the issue;
 - the expected impact on users or their files;
 - the affected version, platform, and installation mode (installer, `.deb`,
-  AppImage, built from source);
+  `.rpm`, AppImage, `.dmg`, built from source);
 - the affected surface: a file format, the single-instance socket, the
   file-manager registration, the installer, a user flow;
 - detailed reproduction steps, with a sample file when the issue is in a
