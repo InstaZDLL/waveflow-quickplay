@@ -132,6 +132,8 @@ pub struct QuickPlayApp {
     /// The last frame taken, which the bars ease toward.
     spectrum_target: Vec<f32>,
     spectrum_tick: Instant,
+    /// Xruns already logged; the output only counts them.
+    xruns_logged: u64,
     /// WaveFlow's executable, looked for in the background: the player
     /// offers to carry on there when it is installed.
     waveflow: waveflow::Finder,
@@ -149,6 +151,8 @@ impl QuickPlayApp {
         if let Some(server) = &ipc {
             server.attach(&ctx);
         }
+        #[cfg(target_os = "macos")]
+        crate::macos::set_repaint(&ctx);
         let notify_ctx = ctx.clone();
         let notify: Arc<dyn Fn() + Send + Sync> = Arc::new(move || notify_ctx.request_repaint());
         let lang = Lang::resolve(&settings.language);
@@ -196,6 +200,7 @@ impl QuickPlayApp {
             spectrum: vec![0.0; crate::audio::spectrum::BAND_COUNT],
             spectrum_target: vec![0.0; crate::audio::spectrum::BAND_COUNT],
             spectrum_tick: Instant::now(),
+            xruns_logged: 0,
             waveflow: waveflow::Finder::spawn({
                 let ctx = cc.egui_ctx.clone();
                 move || ctx.request_repaint()
@@ -516,6 +521,16 @@ impl QuickPlayApp {
     // ── Events ──────────────────────────────────────────────────────────
 
     fn pump_engine_events(&mut self) {
+        if let Some(engine) = &self.engine {
+            let xruns = engine
+                .shared()
+                .xruns
+                .load(std::sync::atomic::Ordering::Relaxed);
+            if xruns > self.xruns_logged {
+                tracing::debug!(total = xruns, "audio xrun, the stream carried on");
+            }
+            self.xruns_logged = xruns;
+        }
         let events = match &self.engine {
             Some(engine) => engine.poll_events(),
             None => return,
@@ -1086,7 +1101,20 @@ impl QuickPlayApp {
         // double-clicking two files is slower than this.
         const BURST: Duration = Duration::from_millis(500);
         let mut got_any = false;
-        while let Some(msg) = self.ipc.as_ref().and_then(|s| s.try_recv()) {
+        // Files opened from Finder are a `play` from a second launch.
+        #[cfg(target_os = "macos")]
+        let mut finder = Some(crate::macos::take_opened())
+            .filter(|paths| !paths.is_empty())
+            .map(|paths| ipc::Message {
+                mode: ipc::Mode::Play,
+                paths,
+            });
+        #[cfg(not(target_os = "macos"))]
+        let mut finder: Option<ipc::Message> = None;
+        while let Some(msg) = finder
+            .take()
+            .or_else(|| self.ipc.as_ref().and_then(|s| s.try_recv()))
+        {
             got_any = true;
             match msg.mode {
                 ipc::Mode::Play => {

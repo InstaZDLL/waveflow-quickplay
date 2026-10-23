@@ -1,14 +1,43 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- The bundle's Info.plist; packaging/macos/bundle.sh fills in @VERSION@.
-     No CFBundleDocumentTypes: egui-winit does not deliver the "open
-     documents" event Finder sends, so a file opened from Finder would land
-     in an empty player. Files come from the command line, a drop on the
-     window or the open dialog. -->
+     The document types put QuickPlay under "Open With" for the formats it
+     plays, ranked Alternate so it never takes over as the default player
+     unless the user picks it (Get Info, Open with, Change All). Declared by
+     extension, as WaveFlow Desktop does: DSF and DFF have no system type,
+     and an entry that lists content types has its extensions ignored. The
+     files arrive as application:openURLs: (src/macos.rs). .mp4 is left
+     out, as in WaveFlow, so QuickPlay is not offered for videos. -->
 <plist version="1.0">
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Audio file</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>mp3</string>
+				<string>flac</string>
+				<string>wav</string>
+				<string>aiff</string>
+				<string>aif</string>
+				<string>ogg</string>
+				<string>oga</string>
+				<string>opus</string>
+				<string>m4a</string>
+				<string>aac</string>
+				<string>dsf</string>
+				<string>dff</string>
+			</array>
+		</dict>
+	</array>
 	<key>CFBundleDisplayName</key>
 	<string>WaveFlow QuickPlay</string>
 	<key>CFBundleName</key>

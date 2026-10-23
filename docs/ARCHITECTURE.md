@@ -32,6 +32,7 @@ waveflow-quickplay
    ├── src/waveflow.rs    finds WaveFlow, hands the playback over to it (core's `handoff`)
    ├── src/integration.rs --register / --unregister (registry verbs, .desktop file)
    ├── src/platform.rs    Windows: owner link between the playlist window and the player
+   ├── src/macos.rs       macOS: the files Finder opens (application:openURLs:)
    ├── src/ui/            theme, painted icons, widgets, player pane, playlist window, settings page
    └── packaging/         NSIS template and Linux desktop entry for cargo-packager,
                           the .rpm definition, the macOS Info.plist and bundle script
@@ -169,6 +170,20 @@ registry labels when the running executable is the registered one (checked
 against the "Open with" command, so a development build never redirects
 the installed menu). `--unregister` removes everything. The Windows
 installer runs both at install and uninstall time.
+
+On macOS there is nothing to register: the bundle's Info.plist declares
+the audio formats (by extension, ranked Alternate, as WaveFlow Desktop
+does), which puts QuickPlay under Finder's "Open With". Finder does not
+pass the file on the command line; it sends an "open documents" Apple
+event, which AppKit hands to the application delegate as
+`application:openURLs:`. winit 0.30 installs a delegate of its own,
+panics if it is replaced, and does not answer that selector, so
+`src/macos.rs` builds the event loop itself, adds the method to winit's
+`WinitApplicationDelegate` class through the Objective-C runtime before
+the loop runs (a file opened at launch arrives before the first frame),
+and hands the loop to eframe with `create_native`. The method queues the
+paths and wakes the UI; the app takes them as a `play` hand-over, so the
+queue is replaced and a multi-selection arrives in one piece.
 
 ## Continuing in WaveFlow
 

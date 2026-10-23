@@ -5,10 +5,13 @@
 #   packaging/macos/bundle.sh <binary> <version> <out-dir>
 #
 # Ad-hoc signing ("-") is the macOS counterpart of the self-signed
-# Windows certificate: the bundle is sealed (tampering breaks it) and
-# has a stable identity, but no Apple Developer ID vouches for it, so
-# Gatekeeper asks once before the first launch. Apple silicon refuses
-# to run unsigned code at all, so the signature is not optional.
+# Windows certificate: the bundle is sealed (tampering breaks it), but no
+# Apple Developer ID vouches for it. Its identity is the hash of the code
+# it signs, so every build has a new one. Gatekeeper blocks the first
+# launch of a downloaded copy: on macOS 15 Sequoia and later the user
+# allows it in System Settings › Privacy & Security (Open Anyway), on
+# earlier versions with right-click › Open. Apple silicon refuses to run
+# unsigned code at all, so the signature is not optional.
 set -euo pipefail
 
 binary=$1

@@ -103,6 +103,20 @@ windows-sys = { version = "0.61", features = [
     "Win32_Storage_FileSystem",
 ] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# Files opened from Finder arrive as `application:openURLs:` on the
+# application delegate (src/macos.rs): the event loop is built here so the
+# method can be added to winit's delegate before it starts, with the winit
+# and objc2 versions eframe already pulls.
+winit = { version = "0.30", default-features = false }
+objc2 = "0.5"
+objc2-foundation = { version = "0.2", features = [
+    "NSArray",
+    "NSEnumerator",
+    "NSString",
+    "NSURL",
+] }
+
 [build-dependencies]
 # Embeds the icon + VERSIONINFO into the Windows executable only; a no-op
 # elsewhere (see build.rs).

@@ -49,6 +49,10 @@ pub struct SharedPlayback {
     /// Analysed frames waiting for their play position. Decoder and UI
     /// threads only.
     pub spectrum: Mutex<SpectrumQueue>,
+    /// Buffer underruns and overruns the backend reported. The error
+    /// callback only counts them (on ALSA it runs on the stream's own
+    /// thread, where nothing may block); the UI thread logs the count.
+    pub xruns: AtomicU64,
 }
 
 impl SharedPlayback {
@@ -65,6 +69,7 @@ impl SharedPlayback {
             samples_pushed: AtomicU64::new(0),
             spectrum_enabled: AtomicBool::new(true),
             spectrum: Mutex::new(SpectrumQueue::default()),
+            xruns: AtomicU64::new(0),
         }
     }
 
