@@ -117,6 +117,9 @@ pub struct QuickPlayApp {
     /// Where the pending load starts. Until its `Loaded` arrives, the
     /// engine's clock still counts the previous track.
     load_start_ms: u64,
+    /// Bumped by every `clear`: a folder scan requested before it belongs to
+    /// a queue that is gone, and its result is dropped when it arrives.
+    scan_generation: u64,
     /// Synced lyrics of the current track, from its `.lrc` sidecar.
     lyrics: Option<Lyrics>,
     /// Test-only window capture, armed by `QUICKPLAY_CAPTURE_DIR`.
@@ -191,6 +194,7 @@ impl QuickPlayApp {
             lyrics: None,
             loaded_generation: 0,
             load_start_ms: 0,
+            scan_generation: 0,
             capture: Capture::from_env(),
             ipc,
             // Files given on the command line count as the first `play` of a
@@ -318,7 +322,8 @@ impl QuickPlayApp {
             // Folders are walked on the loader's thread; the result comes
             // back as `LoaderEvent::Scanned`.
             self.set_status(self.t().status_scanning);
-            self.loader.request_scan(inputs.to_vec(), autoplay);
+            self.loader
+                .request_scan(inputs.to_vec(), autoplay, self.scan_generation);
             return;
         }
         let paths = library::collect_audio_paths(inputs);
@@ -496,6 +501,7 @@ impl QuickPlayApp {
 
     fn clear(&mut self) {
         self.queue.clear();
+        self.scan_generation += 1;
         self.selected = None;
         self.playing_id = None;
         self.duration_ms = None;
@@ -616,7 +622,15 @@ impl QuickPlayApp {
     fn pump_loader_events(&mut self) {
         for event in self.loader.poll() {
             match event {
-                LoaderEvent::Scanned { paths, autoplay } => {
+                LoaderEvent::Scanned {
+                    paths,
+                    autoplay,
+                    generation,
+                } => {
+                    // Requested for a queue that has been cleared since.
+                    if generation != self.scan_generation {
+                        continue;
+                    }
                     self.status = None;
                     self.add_resolved(paths, true, autoplay);
                 }
