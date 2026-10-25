@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.1.0-10b981?style=flat-square" alt="Version 1.1.0" />
+  <img src="https://img.shields.io/badge/version-1.2.0-10b981?style=flat-square" alt="Version 1.2.0" />
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey?style=flat-square" alt="Windows, Linux and macOS" />
   <img src="https://img.shields.io/badge/opens%20in-%3C%20300%20ms-10b981?style=flat-square" alt="Opens in under 300 ms" />
   <img src="https://img.shields.io/badge/license-GPL--3.0--only-green?style=flat-square" alt="GPL-3.0-only" />
@@ -157,7 +157,7 @@ They are complementary, not two sizes of the same thing: QuickPlay deliberately 
     <td align="center"><sub><b>Artwork</b> · the cover edge to edge, window freely resizable</sub></td>
   </tr>
   <tr>
-    <td colspan="2" align="center" valign="top"><img src="docs/screenshots/settings.png" alt="Settings page in place of the controls: language picker in the header, then name, version, tagline, engine, licence and repository link" /></td>
+    <td colspan="2" align="center" valign="top"><img src="docs/screenshots/settings.png" alt="Settings page in place of the controls: language picker in the header, then name, version, tagline, engine, licence and repository link, with the update check a scroll below" /></td>
   </tr>
   <tr>
     <td colspan="2" align="center"><sub><b>Settings</b> · language and about, in the same 154 points</sub></td>
