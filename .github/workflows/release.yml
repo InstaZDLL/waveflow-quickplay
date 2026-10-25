@@ -422,6 +422,13 @@ jobs:
               if grep -qx latest.json <<< "$assets"; then
                 gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" -p latest.json -O "$RUNNER_TEMP/previous.json"
                 manifest=$(jq -e 'select(.platforms | type == "object")' "$RUNNER_TEMP/previous.json")
+                # The entries kept are signed for the release's version;
+                # another one would leave them unusable.
+                previous=$(jq -r '.version // empty' <<< "$manifest")
+                if [ -n "$previous" ] && [ "$previous" != "$version" ]; then
+                  echo "::error::latest.json on $RELEASE_TAG is for $previous, not $version"
+                  exit 1
+                fi
               fi
             elif ! grep -qi "release not found" "$RUNNER_TEMP/view.err"; then
               cat "$RUNNER_TEMP/view.err"
