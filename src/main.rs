@@ -28,6 +28,7 @@ mod queue;
 mod ui;
 mod waveflow;
 
+use std::ffi::OsString;
 use std::path::PathBuf;
 
 use tracing_subscriber::EnvFilter;
@@ -54,28 +55,66 @@ fn app_icon() -> Option<egui::IconData> {
         .ok()
 }
 
+/// What the command line asks for.
+#[derive(Debug, Default)]
+struct Args {
+    version: bool,
+    help: bool,
+    register: bool,
+    unregister: bool,
+    enqueue: bool,
+    /// Files and folders, kept as the OS gave them: a file name need not
+    /// be valid Unicode.
+    files: Vec<PathBuf>,
+    /// Options this version does not know; logged and otherwise ignored.
+    unknown: Vec<String>,
+}
+
+/// Options are read up to `--`, after which everything is a file, so a
+/// file named `--help` can still be opened. Anything else that starts with
+/// `--` is an unknown option, not a file.
+fn parse_args(args: impl IntoIterator<Item = OsString>) -> Args {
+    let mut parsed = Args::default();
+    let mut options_done = false;
+    for arg in args {
+        if options_done {
+            parsed.files.push(PathBuf::from(arg));
+            continue;
+        }
+        match arg.to_str() {
+            Some("--") => options_done = true,
+            Some("--version" | "-V") => parsed.version = true,
+            Some("--help" | "-h") => parsed.help = true,
+            Some("--register") => parsed.register = true,
+            Some("--unregister") => parsed.unregister = true,
+            Some("--enqueue") => parsed.enqueue = true,
+            Some(other) if other.starts_with("--") => parsed.unknown.push(other.to_string()),
+            _ => parsed.files.push(PathBuf::from(arg)),
+        }
+    }
+    parsed
+}
+
 fn main() -> eframe::Result {
     init_tracing();
     let started = std::time::Instant::now();
 
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.iter().any(|a| {
-        matches!(
-            a.as_str(),
-            "--version" | "-V" | "--help" | "-h" | "--register" | "--unregister"
-        )
-    }) {
+    let args = parse_args(std::env::args_os().skip(1));
+    if args.version || args.help || args.register || args.unregister {
         platform::attach_parent_console();
     }
-    if args.iter().any(|a| a == "--version" || a == "-V") {
+    for option in &args.unknown {
+        tracing::warn!(%option, "unknown option ignored");
+    }
+    if args.version {
         println!("waveflow-quickplay {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
     // The interface language also names the file-manager verbs.
     let lang = || i18n::Lang::resolve(&Settings::load().language);
-    if args.iter().any(|a| a == "--help" || a == "-h") {
+    if args.help {
         let t = lang().strings();
-        println!("usage: waveflow-quickplay [--enqueue] [FILE|FOLDER]...");
+        println!("usage: waveflow-quickplay [--enqueue] [--] [FILE|FOLDER]...");
         println!();
         println!("A second launch hands its files to the running player and exits.");
         println!("  --enqueue      append to its queue instead of replacing it");
@@ -86,11 +125,13 @@ fn main() -> eframe::Result {
         println!("  --unregister   remove them");
         return Ok(());
     }
-    let integration_flag = args
-        .iter()
-        .find(|a| *a == "--register" || *a == "--unregister");
-    if let Some(flag) = integration_flag {
-        let run = if flag == "--register" {
+    if args.register || args.unregister {
+        let flag = if args.register {
+            "--register"
+        } else {
+            "--unregister"
+        };
+        let run = if args.register {
             integration::register(lang())
         } else {
             integration::unregister()
@@ -106,16 +147,12 @@ fn main() -> eframe::Result {
             }
         };
     }
-    let mode = if args.iter().any(|a| a == "--enqueue") {
+    let mode = if args.enqueue {
         ipc::Mode::Enqueue
     } else {
         ipc::Mode::Play
     };
-    let files: Vec<PathBuf> = args
-        .iter()
-        .filter(|a| !a.starts_with("--"))
-        .map(PathBuf::from)
-        .collect();
+    let files = args.files;
 
     // Single instance: hand the files to a running player if there is one;
     // otherwise become the one that listens. Losing the creation race means
@@ -134,9 +171,18 @@ fn main() -> eframe::Result {
             let mut handed = false;
             for _ in 0..20 {
                 std::thread::sleep(std::time::Duration::from_millis(50));
-                if ipc::send(mode, &files).unwrap_or(false) {
-                    handed = true;
-                    break;
+                match ipc::send(mode, &files) {
+                    Ok(true) => {
+                        handed = true;
+                        break;
+                    }
+                    Ok(false) => {}
+                    // Paths the socket cannot carry, or an instance that
+                    // does not answer: waiting longer does not help.
+                    Err(e) => {
+                        tracing::warn!(error = %e, "hand-off failed");
+                        break;
+                    }
                 }
             }
             if handed {
@@ -205,4 +251,39 @@ fn main() -> eframe::Result {
             Ok(Box::new(app))
         }),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(args: &[&str]) -> Args {
+        parse_args(args.iter().map(OsString::from))
+    }
+
+    #[test]
+    fn options_end_at_a_double_dash() {
+        let a = parse(&["--enqueue", "a.flac", "--", "--help", "-V"]);
+        assert!(a.enqueue && !a.help && !a.version);
+        assert_eq!(
+            a.files,
+            [PathBuf::from("a.flac"), "--help".into(), "-V".into()]
+        );
+    }
+
+    #[test]
+    fn an_unknown_option_is_not_a_file() {
+        let a = parse(&["--shuffle", "-x.mp3"]);
+        assert_eq!(a.unknown, ["--shuffle"]);
+        assert_eq!(a.files, [PathBuf::from("-x.mp3")]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_file_name_need_not_be_unicode() {
+        use std::os::unix::ffi::OsStringExt;
+        let name = OsString::from_vec(b"caf\xe9.flac".to_vec());
+        let a = parse_args([name.clone()]);
+        assert_eq!(a.files, [PathBuf::from(name)]);
+    }
 }

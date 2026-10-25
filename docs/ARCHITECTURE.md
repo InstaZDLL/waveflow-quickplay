@@ -157,7 +157,15 @@ socket (`src/ipc.rs`): a named pipe on Windows, a socket file in the
 per-user runtime directory (`$XDG_RUNTIME_DIR`, `$TMPDIR` on macOS) on
 Unix, the Linux abstract namespace only when there is no such directory.
 The protocol is a few UTF-8 lines (`play` or `enqueue`, one path per line,
-a blank line, `ok` back); messages are capped in size and count. Explorer
+a blank line, `ok` back); messages are capped in size and count, and one
+that is cut short or over a cap gets no `ok`. A path that is not UTF-8 or
+holds a line break is not sent: that launch opens a window of its own. The
+server reads each connection on a thread of its own (eight at most, with a
+read timeout on Unix sockets) and the client gives up after three seconds,
+so a client that never finishes, or an instance that never answers, holds
+up nothing else. On the abstract namespace, which has no permissions, each
+end checks that the other runs as the same user; the runtime directory is
+only used when this user owns it and nobody else can enter it. Explorer
 starts one process per selected file, so `play` messages arriving within
 half a second of each other are merged into one queue replacement.
 
