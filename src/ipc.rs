@@ -16,16 +16,17 @@
 //! so the client can exit knowing the files were taken. A message that is
 //! cut short, too large or unreadable gets no `ok`.
 //!
-//! Every connection is read on a thread of its own, bounded in number, and
+//! Every connection is read on a thread of its own, bounded in number,
+//! against one deadline for the whole message ([`MESSAGE_DEADLINE`]), and
 //! the client gives up after [`CLIENT_TIMEOUT`]: a client that connects and
 //! never finishes cannot hold up the launches after it, and a server that
 //! never answers cannot hang one.
 
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender, TrySendError};
 use interprocess::local_socket::{
@@ -62,9 +63,9 @@ pub type CtxSlot = Arc<Mutex<Option<egui::Context>>>;
 /// Longest a hand-off may take, connection to answer. Named pipes have no
 /// read timeout, so the exchange runs on a thread and is waited for.
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(3);
-/// Longest the server waits for a client to finish its message, where the
-/// transport has read timeouts (Unix sockets).
-const SERVER_READ_TIMEOUT: Duration = Duration::from_secs(2);
+/// Longest the server waits for a client to finish its message, all reads
+/// together.
+const MESSAGE_DEADLINE: Duration = Duration::from_secs(2);
 /// Connections read at the same time. One more is closed unread.
 const MAX_CLIENTS: usize = 8;
 /// Messages taken and not yet picked up by the UI. One more is refused.
@@ -181,17 +182,26 @@ pub fn send(mode: Mode, paths: &[PathBuf]) -> io::Result<bool> {
     let body = encode(mode, paths)?;
     let point = endpoint()?;
     let (tx, rx) = crossbeam_channel::bounded(1);
+    // Set when this call gives up: an exchange still stuck in its connect
+    // (a busy pipe) then sends nothing once it gets through, or the files
+    // would land in the running player as well as in the window this
+    // launch opens instead.
+    let abandoned = Arc::new(AtomicBool::new(false));
+    let worker_abandoned = abandoned.clone();
     std::thread::Builder::new()
         .name("quickplay-ipc-send".into())
         .spawn(move || {
-            let _ = tx.send(exchange(point, &body));
+            let _ = tx.send(exchange(point, &body, &worker_abandoned));
         })?;
     match rx.recv_timeout(CLIENT_TIMEOUT) {
         Ok(result) => result,
-        Err(_) => Err(io::Error::new(
-            io::ErrorKind::TimedOut,
-            "the running instance did not answer",
-        )),
+        Err(_) => {
+            abandoned.store(true, Ordering::Release);
+            Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "the running instance did not answer",
+            ))
+        }
     }
 }
 
@@ -231,7 +241,7 @@ fn encode(mode: Mode, paths: &[PathBuf]) -> io::Result<String> {
     Ok(body)
 }
 
-fn exchange(point: Endpoint, body: &str) -> io::Result<bool> {
+fn exchange(point: Endpoint, body: &str, abandoned: &AtomicBool) -> io::Result<bool> {
     let mut conn = match Stream::connect(point.name) {
         Ok(c) => c,
         Err(e)
@@ -250,6 +260,13 @@ fn exchange(point: Endpoint, body: &str) -> io::Result<bool> {
             "the socket is held by another user",
         ));
     }
+    if abandoned.load(Ordering::Acquire) {
+        return Err(io::Error::new(io::ErrorKind::TimedOut, "given up"));
+    }
+    // Where the transport has timeouts (Unix sockets), the worker ends
+    // with the wait instead of outliving it.
+    let _ = conn.set_send_timeout(Some(CLIENT_TIMEOUT));
+    let _ = conn.set_recv_timeout(Some(CLIENT_TIMEOUT));
     conn.write_all(body.as_bytes())?;
     conn.flush()?;
     let mut reply = Vec::new();
@@ -365,10 +382,20 @@ fn serve(
 }
 
 fn handle(conn: Stream, tx: &Sender<Message>, ctx: &CtxSlot) {
-    // Unix sockets only: named pipes have no read timeout, and a client
-    // that never finishes there holds its thread until it goes away.
-    let _ = conn.set_recv_timeout(Some(SERVER_READ_TIMEOUT));
-    let mut reader = BufReader::new(conn);
+    // One deadline for the whole message: named pipes have no read
+    // timeout, and a per-read timeout on a Unix socket lets a client that
+    // sends a byte now and then hold its slot forever. Unix sockets are
+    // read nonblocking; a pipe read nonblocking reports "no data yet" as
+    // the end of the stream, so it is polled instead (see `Deadline`).
+    #[cfg(not(windows))]
+    if let Err(e) = conn.set_nonblocking(true) {
+        tracing::warn!(error = %e, "ipc: connection cannot be read with a deadline");
+        return;
+    }
+    let mut reader = BufReader::new(Deadline {
+        inner: conn,
+        until: Instant::now() + MESSAGE_DEADLINE,
+    });
     let Some(message) = read_message(&mut reader) else {
         return;
     };
@@ -386,7 +413,58 @@ fn handle(conn: Stream, tx: &Sender<Message>, ctx: &CtxSlot) {
             ctx.request_repaint();
         }
     }
-    let _ = reader.get_mut().write_all(b"ok\n");
+    let conn = &mut reader.get_mut().inner;
+    #[cfg(not(windows))]
+    let _ = conn.set_nonblocking(false);
+    let _ = conn.write_all(b"ok\n");
+}
+
+/// Reads a connection until `until`; past it the read fails, which ends
+/// the message and frees the connection's slot. A Unix socket is read
+/// nonblocking, and a read that would block waits a little and tries
+/// again; a pipe stays blocking and is only read once it holds data.
+struct Deadline {
+    inner: Stream,
+    until: Instant,
+}
+
+impl Deadline {
+    fn wait(&self) -> io::Result<()> {
+        if Instant::now() >= self.until {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "message not finished in time",
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(10));
+        Ok(())
+    }
+}
+
+impl Read for Deadline {
+    #[cfg(windows)]
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        use std::os::windows::io::{AsHandle, AsRawHandle};
+        let Stream::NamedPipe(pipe) = &self.inner;
+        // Nothing waiting yet: wait. A peek that fails (the client went
+        // away) falls through to the read, which reports it.
+        while crate::platform::pipe_bytes_available(pipe.as_handle().as_raw_handle())
+            .is_ok_and(|n| n == 0)
+        {
+            self.wait()?;
+        }
+        self.inner.read(buf)
+    }
+
+    #[cfg(not(windows))]
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        loop {
+            match self.inner.read(buf) {
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => self.wait()?,
+                other => return other,
+            }
+        }
+    }
 }
 
 /// Upper bounds on one message: paths are short, bursts are per file.

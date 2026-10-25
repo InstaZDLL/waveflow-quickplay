@@ -86,7 +86,8 @@ jobs:
       - run: rustup show active-toolchain
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: cargo test --locked
-      - run: cargo install cargo-packager --version "$CARGO_PACKAGER_VERSION" --locked
+      # pwsh, the Windows runners' shell: environment variables are $env:.
+      - run: cargo install cargo-packager --version "$env:CARGO_PACKAGER_VERSION" --locked
       # Everything is compiled before the certificate enters the runner, so
       # no build script of any dependency runs while the key is importable;
       # cargo-packager then finds the build up to date.

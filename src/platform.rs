@@ -182,3 +182,26 @@ mod tests {
         assert!(!super::same_user_process(4));
     }
 }
+
+/// Bytes waiting to be read in the pipe `handle`, without reading them.
+#[cfg(windows)]
+pub fn pipe_bytes_available(handle: std::os::windows::io::RawHandle) -> std::io::Result<u32> {
+    use windows_sys::Win32::System::Pipes::PeekNamedPipe;
+    let mut available = 0u32;
+    // SAFETY: documented call on a pipe handle the caller holds open; no
+    // buffer is read into, only the count is written.
+    let ok = unsafe {
+        PeekNamedPipe(
+            handle,
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null_mut(),
+            &mut available,
+            std::ptr::null_mut(),
+        )
+    };
+    if ok == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(available)
+}

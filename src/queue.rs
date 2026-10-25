@@ -107,7 +107,13 @@ impl Queue {
         self.shuffle = shuffle;
         self.played.clear();
         self.history.clear();
-        if let Some(id) = self.current().map(|e| e.id) {
+        // A row only waiting under the cursor has not played: it stays
+        // free for the round's first draw.
+        if let Some(id) = self
+            .current()
+            .filter(|_| !self.cursor_pending)
+            .map(|e| e.id)
+        {
             self.played.insert(id);
             self.history.push(id);
         }
@@ -429,6 +435,13 @@ mod tests {
         assert!(q.has_next());
         assert_eq!(q.next_index(), Some(0));
         assert_eq!(q.prev_index(), None, "nothing that played is left");
+        // Shuffle switched on after the removal: the row is still unplayed.
+        let mut q = queue_of(2);
+        q.set_current(Some(0));
+        q.remove(0);
+        q.set_shuffle(true);
+        assert_eq!(q.next_index(), Some(0));
+        assert_eq!(q.prev_index(), None);
     }
 
     #[test]

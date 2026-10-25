@@ -477,10 +477,9 @@ fn play_track(
 }
 
 /// Push as many whole frames of `buf` into the ring as fit; what did not
-/// fit stays at the front of `buf`. Whole frames only: the callback pops
-/// sample by sample into an interleaved buffer, so a ring that ran dry
-/// halfway through a frame would shift every later sample one channel
-/// over.
+/// fit stays at the front of `buf`. Whole frames only, as the callback
+/// reads them: a ring holding half a frame would shift every later sample
+/// one channel over.
 fn push_samples(producer: &mut Producer<f32>, buf: &mut Vec<f32>, channels: usize) {
     let n = producer.slots().min(buf.len());
     let n = n - n % channels.max(1);

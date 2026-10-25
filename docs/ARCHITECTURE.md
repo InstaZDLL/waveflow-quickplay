@@ -160,10 +160,12 @@ The protocol is a few UTF-8 lines (`play` or `enqueue`, one path per line,
 a blank line, `ok` back); messages are capped in size and count, and one
 that is cut short or over a cap gets no `ok`. A path that is not UTF-8 or
 holds a line break is not sent: that launch opens a window of its own. The
-server reads each connection on a thread of its own (eight at most, with a
-read timeout on Unix sockets) and the client gives up after three seconds,
-so a client that never finishes, or an instance that never answers, holds
-up nothing else. Pipe names and the abstract namespace are machine-wide,
+server reads each connection on a thread of its own, eight at most, and
+gives each message two seconds in all (a Unix socket is read nonblocking, a
+pipe is peeked before each read, since it has no timeouts); the client
+gives up after three seconds and, once it has, sends nothing even if its
+connection gets through later. A client that never finishes, or an
+instance that never answers, holds up nothing else for long. Pipe names and the abstract namespace are machine-wide,
 so another user could take the name first: there each end checks that the
 other runs as the same user (the token's user SID on Windows, the peer's
 uid on Linux), and a launch that finds a stranger opens its own window. The

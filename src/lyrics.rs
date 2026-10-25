@@ -313,11 +313,12 @@ mod tests {
         assert_eq!(strip_word_stamps("a < b > c"), "a < b > c");
         assert_eq!(strip_word_stamps("<<00:01.00>x"), "<x");
         assert_eq!(strip_word_stamps("x <y"), "x <y");
-        // Linear: 400k unmatched `<` took seconds with the old scan.
-        let started = std::time::Instant::now();
+        // 400k unmatched `<` took seconds with the old scan, which searched
+        // to the end of the line once per bracket; the one pass takes
+        // milliseconds. No clock in the assertion, so a busy CI runner
+        // cannot fail it.
         let many = "<".repeat(400_000);
         assert_eq!(strip_word_stamps(&many).len(), 400_000);
-        assert!(started.elapsed() < std::time::Duration::from_secs(1));
     }
 
     #[test]

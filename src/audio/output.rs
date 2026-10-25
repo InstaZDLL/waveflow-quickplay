@@ -167,6 +167,7 @@ where
     T: cpal::SizedSample + cpal::FromSample<f32> + Send + 'static,
 {
     let counters = Arc::clone(&shared);
+    let channels = usize::from(config.channels).max(1);
     let err_fn = move |err: cpal::Error| {
         // An xrun is a glitch the stream recovers from by itself: CoreAudio
         // reports one whenever the process stalls, as on the first launch of
@@ -207,18 +208,28 @@ where
                     return;
                 }
                 let volume = shared.volume();
-                let mut written: u64 = 0;
-                for slot in out.iter_mut() {
-                    *slot = match consumer.pop() {
-                        Ok(s) => {
-                            written += 1;
-                            T::from_sample(s * volume)
+                // Whole frames, counted once up front: the decoder pushes
+                // whole frames, but one landing while this buffer is filled
+                // must not start in the middle of a frame left silent here,
+                // or every later sample would sit one channel over.
+                let ready = consumer.slots().min(out.len());
+                let ready = ready - ready % channels;
+                let mut filled = 0;
+                if ready > 0 {
+                    if let Ok(chunk) = consumer.read_chunk(ready) {
+                        let (first, second) = chunk.as_slices();
+                        for (slot, s) in out.iter_mut().zip(first.iter().chain(second)) {
+                            *slot = T::from_sample(s * volume);
                         }
-                        Err(_) => T::from_sample(0.0_f32),
-                    };
+                        chunk.commit_all();
+                        filled = ready;
+                        shared
+                            .samples_played
+                            .fetch_add(ready as u64, Ordering::AcqRel);
+                    }
                 }
-                if written > 0 {
-                    shared.samples_played.fetch_add(written, Ordering::AcqRel);
+                for slot in out.iter_mut().skip(filled) {
+                    *slot = T::from_sample(0.0_f32);
                 }
             },
             err_fn,
