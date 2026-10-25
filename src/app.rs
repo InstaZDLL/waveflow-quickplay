@@ -269,13 +269,7 @@ impl QuickPlayApp {
             .map(|e| std::path::absolute(&e.path).unwrap_or_else(|_| e.path.clone()))
             .collect();
         let index = self.queue.current_index().unwrap_or(0);
-        // Before the pending load's `Loaded`, the engine's clock is still the
-        // previous track's: the new one starts where it was asked to.
-        let position = if self.loaded_generation == self.generation {
-            self.engine.as_ref().map_or(0, |e| e.shared().position_ms())
-        } else {
-            self.load_start_ms
-        };
+        let position = self.position_ms();
         // Stopped or at the end: WaveFlow gets the track, from its start,
         // and waits; playing or loading: it carries on.
         let (position_ms, playing) = match self.state {
@@ -313,6 +307,18 @@ impl QuickPlayApp {
 
     fn set_status(&mut self, message: impl Into<String>) {
         self.status = Some((message.into(), Instant::now()));
+        // Idle, nothing else would wake the loop to take the line down.
+        self.ctx.request_repaint_after(STATUS_TTL);
+    }
+
+    /// Where the current track is. Until the pending load's `Loaded`
+    /// arrives, the engine's clock still counts the previous track: the
+    /// new one is where it was asked to start.
+    fn position_ms(&self) -> u64 {
+        if self.state == PlayerState::Loading && self.loaded_generation != self.generation {
+            return self.load_start_ms;
+        }
+        self.engine.as_ref().map_or(0, |e| e.shared().position_ms())
     }
 
     // ── Queue ───────────────────────────────────────────────────────────
@@ -371,6 +377,16 @@ impl QuickPlayApp {
     /// track again), unwinding the shuffle history to it instead of
     /// recording it again.
     fn play_index_from(&mut self, index: usize, start_ms: u64, autoplay: bool, back: bool) {
+        if index >= self.queue.len() {
+            return;
+        }
+        // No engine, no load: the player stays as it was, with the reason
+        // in the status line, and the next Play tries the device again.
+        // Committed to Loading first, it would wait for a Loaded that no
+        // engine is there to send.
+        if self.ensure_engine().is_none() {
+            return;
+        }
         let Some(entry) = self.queue.get(index) else {
             return;
         };
@@ -433,7 +449,7 @@ impl QuickPlayApp {
     }
 
     fn prev(&mut self) {
-        let position = self.engine.as_ref().map_or(0, |e| e.shared().position_ms());
+        let position = self.position_ms();
         if position > PREV_RESTART_THRESHOLD_MS || self.queue.prev_index().is_none() {
             self.restart_current(0);
         } else if let Some(i) = self.queue.prev_index() {
@@ -462,6 +478,10 @@ impl QuickPlayApp {
         let ms = (fraction.clamp(0.0, 1.0) as f64 * duration as f64) as u64;
         match self.state {
             PlayerState::Playing | PlayerState::Paused | PlayerState::Loading => {
+                if self.state == PlayerState::Loading && self.loaded_generation != self.generation {
+                    // Folded into where the open starts.
+                    self.load_start_ms = ms;
+                }
                 self.send(AudioCmd::Seek(ms));
             }
             // After a natural end the decoder is idle: reload at the offset.
@@ -479,20 +499,21 @@ impl QuickPlayApp {
 
     fn remove(&mut self, index: usize) {
         let was_current = self.queue.remove(index);
-        if was_current && self.playing_id.is_some() {
-            // The playing row is gone: stop, and let Next move on.
-            self.send(AudioCmd::Stop);
-            self.playing_id = None;
-            self.state = PlayerState::Idle;
-            self.duration_ms = None;
-            self.cover = None;
-            self.cover_for = None;
-            // The cursor now points at the row that moved up — Play resumes
-            // from it, which is what a list does when you delete the
-            // current entry.
-            if let Some(c) = self.queue.current_index() {
-                self.queue.set_current(Some(c));
+        if was_current {
+            if self.playing_id.is_some() {
+                // The playing row is gone: stop, and drop whatever its load
+                // still has on the way, an end or an error that would
+                // start another track.
+                self.send(AudioCmd::Stop);
+                self.generation += 1;
+                self.playing_id = None;
+                self.state = PlayerState::Idle;
             }
+            // The cursor now points at the row that moved up, which has not
+            // played: Play and Next start it, as a list does when you
+            // delete the current entry. Nothing of the deleted track stays
+            // on screen under its title.
+            self.forget_track();
         }
         self.selected = match self.selected {
             Some(s) if s == index => (index < self.queue.len()).then_some(index),
@@ -504,16 +525,25 @@ impl QuickPlayApp {
     fn clear(&mut self) {
         self.queue.clear();
         self.scan_generation += 1;
+        self.generation += 1;
         self.selected = None;
         self.playing_id = None;
-        self.duration_ms = None;
-        self.codec = None;
-        self.cover = None;
-        self.cover_for = None;
+        self.forget_track();
         self.state = PlayerState::Idle;
         if let Some(engine) = &self.engine {
             engine.send(AudioCmd::Stop);
         }
+    }
+
+    /// Drop what belonged to the track that was current: its length,
+    /// codec, lyrics, cover and a seek being dragged.
+    fn forget_track(&mut self) {
+        self.duration_ms = None;
+        self.codec = None;
+        self.lyrics = None;
+        self.seek_preview = None;
+        self.cover = None;
+        self.cover_for = None;
     }
 
     fn open_dialog(&mut self) {
@@ -734,7 +764,7 @@ impl QuickPlayApp {
     fn shortcut_snapshot(&self) -> ShortcutSnapshot {
         ShortcutSnapshot {
             volume: self.settings.volume,
-            position_ms: self.engine.as_ref().map_or(0, |e| e.shared().position_ms()),
+            position_ms: self.position_ms(),
             duration_ms: self.duration_ms,
         }
     }
@@ -880,6 +910,9 @@ impl QuickPlayApp {
             }
             Action::Stop => {
                 self.send(AudioCmd::Stop);
+                // An end or an error the decoder sent before it took the
+                // Stop must not start the next track.
+                self.generation += 1;
                 self.state = PlayerState::Idle;
                 self.seek_preview = None;
             }
@@ -918,7 +951,7 @@ impl QuickPlayApp {
         let position_ms = match self.state {
             PlayerState::Idle => 0,
             PlayerState::Ended => self.duration_ms.unwrap_or(0),
-            _ => self.engine.as_ref().map_or(0, |e| e.shared().position_ms()),
+            _ => self.position_ms(),
         };
         let format_chips = current.map_or_else(Vec::new, |e| {
             let meta = e.meta.as_ref();
