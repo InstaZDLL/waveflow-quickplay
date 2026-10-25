@@ -103,6 +103,7 @@ body:
       label: Log
       description: |
         Run QuickPlay from a terminal with `RUST_LOG=debug` (PowerShell: `$env:RUST_LOG="debug"; .\waveflow-quickplay.exe file.flac`) and paste the lines around the bug.
+        This issue is public and the log prints full file paths, which can show your user name and your folder and file names: replace whatever you would rather keep private before posting.
       render: shell
 
   - type: textarea

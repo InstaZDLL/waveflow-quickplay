@@ -1,15 +1,25 @@
 # Labels every pull request: `scope:` from the touched paths
 # (.github/labeler.yml), `type:` from the Conventional Commits prefix of the
 # title, `size:` from the diff. Same scheme as the WaveFlow repository.
+#
+# `pull_request_target` runs in the base repository with a token that can
+# write labels, so pull requests from forks are labelled too. It is safe here
+# because nothing from the pull request is checked out or run: the labeler
+# reads its rules from the base branch and the scripts only call the API.
 name: Label PR
 
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, synchronize, edited]
 
 permissions:
   contents: read
   pull-requests: write
+
+# Title edits and pushes in quick succession: only the latest run labels.
+concurrency:
+  group: label-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   label:
@@ -36,7 +46,13 @@ jobs:
         with:
           github-token: ${{ env.LABEL_TOKEN }}
           script: |
-            const title = context.payload.pull_request.title;
+            // The title as it is now, not as it was when this event fired.
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+            });
+            const title = pr.title;
             const prefixMap = {
               'feat': 'type: feat',
               'fix': 'type: fix',
@@ -49,12 +65,13 @@ jobs:
             };
             const match = title.match(/^(\w+)(\(.+\))?[!]?:/);
             const label = prefixMap[match?.[1]];
-            const current = await github.rest.issues.listLabelsOnIssue({
+            const current = await github.paginate(github.rest.issues.listLabelsOnIssue, {
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
+              per_page: 100,
             });
-            for (const l of current.data.filter(l => l.name.startsWith('type:'))) {
+            for (const l of current.filter(l => l.name.startsWith('type:'))) {
               if (l.name !== label) {
                 await github.rest.issues.removeLabel({
                   owner: context.repo.owner,
@@ -94,12 +111,13 @@ jobs:
               { max: 500, label: 'size: l' },
             ];
             const sizeLabel = sizeLabels.find(s => lines <= s.max)?.label || 'size: xl';
-            const current = await github.rest.issues.listLabelsOnIssue({
+            const current = await github.paginate(github.rest.issues.listLabelsOnIssue, {
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
+              per_page: 100,
             });
-            for (const l of current.data.filter(l => l.name.startsWith('size:'))) {
+            for (const l of current.filter(l => l.name.startsWith('size:'))) {
               if (l.name !== sizeLabel) {
                 await github.rest.issues.removeLabel({
                   owner: context.repo.owner,
