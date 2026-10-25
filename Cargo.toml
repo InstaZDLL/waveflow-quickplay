@@ -164,5 +164,5 @@ display-language-selector = false
 [package.metadata.packager.deb]
 package-name = "waveflow-quickplay"
 desktop-template = "packaging/quickplay.desktop"
-depends = ["libasound2 | libasound2t64", "libxkbcommon0", "libwayland-client0", "libgl1"]
+depends = ["libgcc-s1", "libasound2 | libasound2t64", "libxkbcommon0", "libwayland-client0", "libegl1", "libgl1", "libx11-6", "libx11-xcb1", "libxcursor1", "libxi6", "libxkbcommon-x11-0"]
 section = "sound"

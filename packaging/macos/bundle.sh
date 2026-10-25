@@ -14,9 +14,18 @@
 # unsigned code at all, so the signature is not optional.
 set -euo pipefail
 
+if [ $# -ne 3 ]; then
+  echo "usage: $0 <binary> <version> <out-dir>" >&2
+  exit 2
+fi
 binary=$1
 version=$2
 out=$3
+# The version goes into a sed replacement, the plist and file names.
+if ! [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+  echo "bundle.sh: not a version: $version" >&2
+  exit 2
+fi
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
 
@@ -34,15 +43,17 @@ codesign --force --sign - --timestamp=none "$app"
 codesign --verify --strict --verbose=2 "$app"
 codesign --display --verbose=2 "$app" 2>&1 | grep -E '^(Identifier|Format|Signature)='
 
-stage="$out/dmg-stage"
-rm -rf "$stage"
-mkdir -p "$stage"
-cp -R "$app" "$stage/"
-ln -s /Applications "$stage/Applications"
+# The image is staged, built and verified in a folder of this run's own,
+# then moved over the previous one: a failed build leaves that image alone
+# and no half-written one behind.
+stage=$(mktemp -d "$out/dmg-stage.XXXXXX")
+trap 'rm -rf "$stage"' EXIT
+mkdir "$stage/root"
+cp -R "$app" "$stage/root/"
+ln -s /Applications "$stage/root/Applications"
 dmg="$out/waveflow-quickplay_${version}_macos-universal.dmg"
-rm -f "$dmg"
-hdiutil create -volname "WaveFlow QuickPlay $version" -srcfolder "$stage" \
-  -fs HFS+ -format UDZO -ov "$dmg"
-rm -rf "$stage"
-hdiutil verify "$dmg"
+hdiutil create -volname "WaveFlow QuickPlay $version" -srcfolder "$stage/root" \
+  -fs HFS+ -format UDZO -ov "$stage/image.dmg"
+hdiutil verify "$stage/image.dmg"
+mv -f "$stage/image.dmg" "$dmg"
 echo "$dmg"
