@@ -78,8 +78,15 @@ impl AudioEngine {
         )?;
 
         let (cmd_tx, cmd_rx) = unbounded::<AudioCmd>();
-        let decoder = spawn_decoder_thread(cmd_rx, producer, shared.clone(), sink)
-            .map_err(|e| format!("spawn decoder thread: {e}"))?;
+        let decoder = match spawn_decoder_thread(cmd_rx, producer, shared.clone(), sink) {
+            Ok(decoder) => decoder,
+            Err(e) => {
+                // Close the device and join its thread before reporting, so
+                // a retry does not race the stream still open.
+                output.stop();
+                return Err(format!("spawn decoder thread: {e}"));
+            }
+        };
 
         Ok(Self {
             cmd_tx,

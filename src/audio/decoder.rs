@@ -326,6 +326,11 @@ impl Session<'_> {
             }
             AudioCmd::Resume => {
                 self.shared.paused_output.store(false, Ordering::Release);
+                // The tail waits for the output, which does not play while
+                // paused: its deadline counts from the resume.
+                if let Some(since) = self.eof.as_mut() {
+                    *since = Instant::now();
+                }
                 set_state(self.shared, self.events, PlayerState::Playing);
                 None
             }
@@ -416,7 +421,7 @@ fn play_track(
         //    when it is full come back to the command drain after a nap.
         if !session.out.is_empty() {
             let before = session.out.len();
-            push_samples(session.producer, &mut session.out);
+            push_samples(session.producer, &mut session.out, dst_channels);
             let written = (before - session.out.len()) as u64;
             shared.samples_pushed.fetch_add(written, Ordering::AcqRel);
             if !session.out.is_empty() {
@@ -471,14 +476,17 @@ fn play_track(
     }
 }
 
-/// Push as much of `buf` into the ring as fits; what did not fit stays at
-/// the front of `buf`.
-fn push_samples(producer: &mut Producer<f32>, buf: &mut Vec<f32>) {
-    let slots = producer.slots();
-    if slots == 0 || buf.is_empty() {
+/// Push as many whole frames of `buf` into the ring as fit; what did not
+/// fit stays at the front of `buf`. Whole frames only: the callback pops
+/// sample by sample into an interleaved buffer, so a ring that ran dry
+/// halfway through a frame would shift every later sample one channel
+/// over.
+fn push_samples(producer: &mut Producer<f32>, buf: &mut Vec<f32>, channels: usize) {
+    let n = producer.slots().min(buf.len());
+    let n = n - n % channels.max(1);
+    if n == 0 {
         return;
     }
-    let n = slots.min(buf.len());
     if let Ok(chunk) = producer.write_chunk_uninit(n) {
         let written = chunk.fill_from_iter(buf.iter().copied());
         buf.drain(..written);
@@ -497,7 +505,7 @@ fn drain_ring(producer: &Producer<f32>, shared: &SharedPlayback) {
 
 #[cfg(test)]
 mod tests {
-    use super::clamp_to_track;
+    use super::{clamp_to_track, push_samples};
 
     #[test]
     fn a_position_stays_within_the_track() {
@@ -505,5 +513,21 @@ mod tests {
         assert_eq!(clamp_to_track(1_000, Some(3_000)), 1_000);
         assert_eq!(clamp_to_track(5_000, Some(0)), 5_000, "no length known");
         assert_eq!(clamp_to_track(5_000, None), 5_000);
+    }
+
+    #[test]
+    fn only_whole_frames_go_into_the_ring() {
+        let (mut producer, mut consumer) = rtrb::RingBuffer::<f32>::new(5);
+        let mut buf = vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0];
+        push_samples(&mut producer, &mut buf, 2);
+        assert_eq!(
+            buf,
+            [4.0, 5.0, 6.0, 7.0],
+            "two stereo frames fit in five slots"
+        );
+        assert_eq!(consumer.slots(), 4);
+        consumer.pop().unwrap();
+        push_samples(&mut producer, &mut buf, 2);
+        assert_eq!(buf, [6.0, 7.0], "one frame more once two slots are free");
     }
 }

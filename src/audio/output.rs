@@ -173,9 +173,16 @@ where
         // a new build while macOS scans it. Releasing the engine for it would
         // stop the track; only the other errors mean the stream is gone.
         // Counted, not logged: on ALSA this runs on the stream's thread.
-        if err.kind() == cpal::ErrorKind::Xrun {
-            counters.xruns.fetch_add(1, Ordering::Relaxed);
-            return;
+        // A changed device is not an end either: the stream follows the
+        // default output (CoreAudio reports it when headphones are plugged
+        // in or out) and keeps playing on the new one.
+        match err.kind() {
+            cpal::ErrorKind::Xrun => {
+                counters.xruns.fetch_add(1, Ordering::Relaxed);
+                return;
+            }
+            cpal::ErrorKind::DeviceChanged => return,
+            _ => {}
         }
         on_error(format!("audio device error: {err}"));
     };
