@@ -66,7 +66,7 @@ pub const STRINGS: Strings = Strings {
     about: "Info",
     about_tagline: "Der kleine Player neben WaveFlow: Titel doppelt anklicken, sofort hören.",
     about_version: "Version {v}",
-    about_license: "Freie Software unter der GPL-3.0",
+    about_license: "Freie Software unter der GPL-3.0-only",
     about_engine: "Basiert auf waveflow-core, der Desktop-Engine von WaveFlow",
     about_source: "Quellcode und Releases",
 

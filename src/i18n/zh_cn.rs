@@ -65,7 +65,7 @@ pub const STRINGS: Strings = Strings {
     about: "关于",
     about_tagline: "WaveFlow 的轻巧播放器：双击曲目，即刻播放。",
     about_version: "版本 {v}",
-    about_license: "自由软件，GPL-3.0 许可证",
+    about_license: "自由软件，GPL-3.0-only 许可证",
     about_engine: "基于 WaveFlow 桌面引擎 waveflow-core 构建",
     about_source: "源代码与发布版本",
 

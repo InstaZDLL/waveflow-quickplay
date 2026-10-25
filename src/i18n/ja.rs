@@ -67,7 +67,7 @@ pub const STRINGS: Strings = Strings {
     about: "このアプリについて",
     about_tagline: "WaveFlow の小さな相棒。曲をダブルクリックするだけで、すぐに音楽を楽しめます。",
     about_version: "バージョン {v}",
-    about_license: "フリーソフトウェア、GPL-3.0 ライセンス",
+    about_license: "フリーソフトウェア、GPL-3.0-only ライセンス",
     about_engine: "waveflow-core（WaveFlow のデスクトップエンジン）をベースに構築",
     about_source: "ソースコードとリリース",
 

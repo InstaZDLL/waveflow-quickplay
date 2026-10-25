@@ -65,7 +65,7 @@ pub const STRINGS: Strings = Strings {
     about: "À propos",
     about_tagline: "Le petit lecteur qui accompagne WaveFlow\u{a0}: double-cliquez sur un titre, écoutez-le aussitôt.",
     about_version: "Version {v}",
-    about_license: "Logiciel libre, licence GPL-3.0",
+    about_license: "Logiciel libre, licence GPL-3.0-only",
     about_engine: "Basé sur waveflow-core, le moteur de WaveFlow",
     about_source: "Code source et versions",
 
