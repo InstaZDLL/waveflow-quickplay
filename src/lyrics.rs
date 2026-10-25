@@ -5,12 +5,20 @@
 //! deliberate "nothing to show" marker, which the UI turns back into the
 //! track title, as PotPlayer does.
 
+use std::io::Read;
 use std::path::Path;
+use std::sync::Arc;
+
+/// The largest sidecar read. A song's lyrics are a few kilobytes; a file
+/// far bigger is not lyrics, and is left alone rather than parsed on the
+/// UI thread.
+const MAX_SIDECAR_BYTES: u64 = 1 << 20;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Line {
     at_ms: u64,
-    text: String,
+    /// Shared by every timestamp of one LRC line (`[00:02][00:07]chorus`).
+    text: Arc<str>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -25,17 +33,35 @@ impl Lyrics {
         audio.file_stem()?;
         // `with_extension` on the full path: a stem with dots in it
         // (`01. Intro.flac`) must become `01. Intro.lrc`, not `01.lrc`.
-        let candidate = ["lrc", "LRC", "Lrc"]
-            .iter()
-            .map(|ext| audio.with_extension(ext))
+        // Every casing of the extension, for case-sensitive file systems;
+        // on the others the first one already finds any.
+        let candidate = (0..8u8)
+            .map(|mask| {
+                let ext: String = "lrc"
+                    .chars()
+                    .enumerate()
+                    .map(|(i, c)| {
+                        if mask & (1 << i) != 0 {
+                            c.to_ascii_uppercase()
+                        } else {
+                            c
+                        }
+                    })
+                    .collect();
+                audio.with_extension(ext)
+            })
             .find(|p| p.is_file())?;
-        let bytes = match std::fs::read(&candidate) {
-            Ok(b) => b,
-            Err(e) => {
-                tracing::warn!(path = %candidate.display(), error = %e, "lrc unreadable");
-                return None;
-            }
-        };
+        let mut bytes = Vec::new();
+        let read = std::fs::File::open(&candidate)
+            .and_then(|f| f.take(MAX_SIDECAR_BYTES + 1).read_to_end(&mut bytes));
+        if let Err(e) = read {
+            tracing::warn!(path = %candidate.display(), error = %e, "lrc unreadable");
+            return None;
+        }
+        if bytes.len() as u64 > MAX_SIDECAR_BYTES {
+            tracing::warn!(path = %candidate.display(), max = MAX_SIDECAR_BYTES, "lrc too large, ignored");
+            return None;
+        }
         let text = String::from_utf8_lossy(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes));
         let parsed = Self::parse(&text);
         if let Some(l) = &parsed {
@@ -60,30 +86,36 @@ impl Lyrics {
                 if let Some(ms) = parse_stamp(tag) {
                     stamps.push(ms);
                 } else if let Some(v) = tag.strip_prefix("offset:") {
-                    offset_ms = v.trim().parse().unwrap_or(0);
+                    // A malformed one leaves the offset as it was.
+                    match v.trim().parse() {
+                        Ok(ms) => offset_ms = ms,
+                        Err(_) => tracing::debug!(tag, "lrc offset unreadable, ignored"),
+                    }
                 }
                 // Any other `[id:value]` tag is metadata; ignored.
             }
             if stamps.is_empty() {
                 continue;
             }
-            let text = strip_word_stamps(rest);
+            let text: Arc<str> = strip_word_stamps(rest).into();
             for at_ms in stamps {
                 raw.push(Line {
                     at_ms,
-                    text: text.clone(),
+                    text: Arc::clone(&text),
                 });
             }
         }
         if raw.is_empty() {
             return None;
         }
+        // In file time first: the offset can bring several lines down to
+        // zero, and among those the last one in time must stay last.
+        raw.sort_by_key(|l| l.at_ms);
         // A positive offset shifts the lyrics earlier (LRC convention).
         for l in &mut raw {
             let shifted = i128::from(l.at_ms) - i128::from(offset_ms);
             l.at_ms = shifted.clamp(0, i128::from(u64::MAX)) as u64;
         }
-        raw.sort_by_key(|l| l.at_ms);
         Some(Self { lines: raw })
     }
 
@@ -98,7 +130,7 @@ impl Lyrics {
     pub fn current(&self, pos_ms: u64) -> Option<(u64, &str)> {
         let idx = self.lines.partition_point(|l| l.at_ms <= pos_ms);
         let line = self.lines.get(idx.checked_sub(1)?)?;
-        (!line.text.is_empty()).then_some((line.at_ms, line.text.as_str()))
+        (!line.text.is_empty()).then_some((line.at_ms, &*line.text))
     }
 
     /// When the displayed line next changes after `pos_ms`, if ever.
@@ -140,19 +172,28 @@ fn parse_stamp(tag: &str) -> Option<u64> {
 }
 
 /// Removes enhanced-LRC `<mm:ss.xx>` word stamps and collapses the spaces.
+/// One pass: a `<` that opens no stamp is text, and the scan goes on from
+/// the next `<` or `>` after it, so stray brackets are never searched past
+/// more than once.
 fn strip_word_stamps(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
     while let Some(start) = rest.find('<') {
-        let (before, after) = rest.split_at(start);
-        out.push_str(before);
-        match after[1..].find('>') {
-            Some(end) if parse_stamp(&after[1..1 + end]).is_some() => {
-                rest = &after[1 + end + 1..];
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 1..];
+        match after.find(['<', '>']) {
+            Some(end) if after.as_bytes()[end] == b'>' && parse_stamp(&after[..end]).is_some() => {
+                rest = &after[end + 1..];
             }
-            _ => {
+            Some(end) => {
                 out.push('<');
-                rest = &after[1..];
+                out.push_str(&after[..end]);
+                rest = &after[end..];
+            }
+            None => {
+                out.push('<');
+                rest = after;
+                break;
             }
         }
     }
@@ -179,8 +220,8 @@ mod tests {
         assert_eq!(l.lines.len(), 5);
         assert_eq!(l.lines[0].at_ms, 1000);
         assert_eq!(l.lines[1].at_ms, 2000);
-        assert_eq!(l.lines[1].text, "repeated");
-        assert_eq!(l.lines[3].text, "third line");
+        assert_eq!(&*l.lines[1].text, "repeated");
+        assert_eq!(&*l.lines[3].text, "third line");
         assert_eq!(l.lines[4].at_ms, 7000);
     }
 
@@ -244,7 +285,47 @@ mod tests {
         .unwrap();
         let l = Lyrics::load_for(&audio).expect("sidecar found");
         assert_eq!(l.line_at(1000), Some("hello"));
+        // Any casing of the extension, on case-sensitive file systems too.
+        let other = dir.join("02. Outro.flac");
+        std::fs::write(&other, b"").unwrap();
+        std::fs::write(dir.join("02. Outro.lRc"), "[00:02.00]bye\n").unwrap();
+        let l = Lyrics::load_for(&other).expect("mixed-case sidecar found");
+        assert_eq!(l.line_at(2000), Some("bye"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_bad_offset_keeps_the_good_one() {
+        let l = Lyrics::parse("[offset:500]\n[offset:bad]\n[00:01]a\n").unwrap();
+        assert_eq!(l.lines[0].at_ms, 500);
+    }
+
+    #[test]
+    fn lines_brought_to_zero_keep_their_order() {
+        // Out of order in the file; the offset brings both to zero, and the
+        // later one (b, at 3 s) is the one in force there.
+        let l = Lyrics::parse("[offset:5000]\n[00:03]b\n[00:01]a\n").unwrap();
+        assert_eq!(l.line_at(0), Some("b"));
+    }
+
+    #[test]
+    fn stray_brackets_are_text_and_cheap() {
+        assert_eq!(strip_word_stamps("a < b > c"), "a < b > c");
+        assert_eq!(strip_word_stamps("<<00:01.00>x"), "<x");
+        assert_eq!(strip_word_stamps("x <y"), "x <y");
+        // Linear: 400k unmatched `<` took seconds with the old scan.
+        let started = std::time::Instant::now();
+        let many = "<".repeat(400_000);
+        assert_eq!(strip_word_stamps(&many).len(), 400_000);
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    }
+
+    #[test]
+    fn repeated_stamps_share_their_text() {
+        let line = format!("{}{}\n", "[0:1]".repeat(1000), "x".repeat(1000));
+        let l = Lyrics::parse(&line).unwrap();
+        assert_eq!(l.lines.len(), 1000);
+        assert!(Arc::ptr_eq(&l.lines[0].text, &l.lines[999].text));
     }
 
     #[test]
