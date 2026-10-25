@@ -23,6 +23,8 @@ pub const STRINGS: Strings = Strings {
     tip_spectrum: "스펙트럼 (S)",
     tip_settings: "설정",
     tip_always_on_top: "항상 위에 표시 (T)",
+    tip_always_on_top_xwayland: "항상 위에 표시 (T) — XWayland로 QuickPlay를 다시 시작합니다",
+    tip_always_on_top_wayland: "항상 위에 표시 (T) — 끄면 Wayland로 QuickPlay를 다시 시작합니다",
     tip_minimize: "최소화",
     tip_close: "닫기",
 
@@ -48,6 +50,8 @@ pub const STRINGS: Strings = Strings {
     status_no_audio_files: "지원되는 오디오 파일 없음",
     status_cannot_play: "재생할 수 없음: {e}",
     status_cannot_open_waveflow: "WaveFlow를 열 수 없음: {e}",
+    status_pin_needs_xwayland: "항상 위에 표시에는 XWayland가 필요하지만 이 세션에는 없습니다",
+    status_cannot_restart: "QuickPlay를 다시 시작할 수 없음: {e}",
     tip_open_in_waveflow: "WaveFlow에서 계속 듣기",
 
     // ── File dialog ────────────────────────────────────────────────────

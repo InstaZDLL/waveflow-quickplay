@@ -23,6 +23,8 @@ pub const STRINGS: Strings = Strings {
     tip_spectrum: "频谱 (S)",
     tip_settings: "设置",
     tip_always_on_top: "始终置顶 (T)",
+    tip_always_on_top_xwayland: "始终置顶 (T)——在 XWayland 下重启 QuickPlay",
+    tip_always_on_top_wayland: "始终置顶 (T)——关闭后在 Wayland 下重启 QuickPlay",
     tip_minimize: "最小化",
     tip_close: "关闭",
 
@@ -48,6 +50,8 @@ pub const STRINGS: Strings = Strings {
     status_no_audio_files: "未找到支持的音频文件",
     status_cannot_play: "无法播放：{e}",
     status_cannot_open_waveflow: "无法打开 WaveFlow：{e}",
+    status_pin_needs_xwayland: "始终置顶需要 XWayland，但当前会话没有",
+    status_cannot_restart: "无法重启 QuickPlay：{e}",
     tip_open_in_waveflow: "在 WaveFlow 中继续播放",
 
     // ── File dialog ────────────────────────────────────────────────────

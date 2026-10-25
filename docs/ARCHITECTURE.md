@@ -127,6 +127,21 @@ locks the height to the controls block; artwork mode adds the cover above
 it and makes the window freely resizable; the settings page takes the
 content area in both modes.
 
+The pin is a window level (`WindowLevel::AlwaysOnTop`) except in a Wayland
+session, where winit cannot set one: the compositor alone stacks windows.
+There `src/restart.rs` runs QuickPlay under XWayland while it is pinned.
+A click on the pin writes where playback is (queue, current row, position,
+playing or paused) to a private file (`$XDG_RUNTIME_DIR`, mode 0600, a name
+nobody can guess), starts a new copy with `--restart-state <file>
+--after-pid <pid>`, stops the audio and closes; the new copy waits for the
+old one to exit (it holds the single-instance socket and the device),
+builds its event loop with `with_x11()` because the pin is now on, and
+resumes from the file. Unpinning does the same back to Wayland. XWayland
+is checked by opening the display as winit would (`XOpenDisplay`) before
+it is chosen, at start-up when pinned and on the click, never otherwise:
+winit builds one event loop per process, so a failed X11 start could not
+fall back, and in GNOME the first X client starts XWayland.
+
 The playlist is a second native window (`show_viewport_immediate`) docked
 beside the player, as PotPlayer's playlist is:
 

@@ -136,8 +136,9 @@ fn private_runtime_dir() -> Option<PathBuf> {
     None
 }
 
+/// A directory owned by this user that nobody else can enter.
 #[cfg(unix)]
-fn is_private(dir: &std::path::Path) -> bool {
+pub fn is_private(dir: &std::path::Path) -> bool {
     use std::os::unix::fs::MetadataExt;
     std::fs::metadata(dir).is_ok_and(|m| {
         // SAFETY: geteuid has no preconditions and cannot fail.
@@ -146,7 +147,7 @@ fn is_private(dir: &std::path::Path) -> bool {
 }
 
 #[cfg(not(unix))]
-fn is_private(dir: &std::path::Path) -> bool {
+pub fn is_private(dir: &std::path::Path) -> bool {
     dir.is_dir()
 }
 

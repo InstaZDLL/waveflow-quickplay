@@ -296,6 +296,13 @@ The working set is dominated by the OpenGL driver and the decoded cover
 - **Wayland** does not let an application position its windows, so the
   playlist opens where the compositor puts it and does not follow the
   player there. Under XWayland and everywhere else it docks.
+- **Always on top on Wayland**: only the compositor may keep a window on
+  top there, so pinning QuickPlay in a Wayland session restarts it under
+  XWayland, where the pin works (GNOME, KDE) and the playlist docks again,
+  with the same queue, track, position and play or pause; unpinning
+  restarts it under Wayland. It stays under XWayland while pinned, which
+  can look softer at fractional scaling unless the compositor scales X11
+  windows natively. A session without XWayland cannot pin.
 - **Output device**: the OS default, opened at its default configuration
   (shared mode). No device picker, no exclusive mode. If the device goes
   away, the engine is released and the next play reopens the new default.
