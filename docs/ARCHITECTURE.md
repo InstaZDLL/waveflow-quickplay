@@ -131,16 +131,22 @@ The pin is a window level (`WindowLevel::AlwaysOnTop`) except in a Wayland
 session, where winit cannot set one: the compositor alone stacks windows.
 There `src/restart.rs` runs QuickPlay under XWayland while it is pinned.
 A click on the pin writes where playback is (queue, current row, position,
-playing or paused) to a private file (`$XDG_RUNTIME_DIR`, mode 0600, a name
-nobody can guess), starts a new copy with `--restart-state <file>
---after-pid <pid>`, stops the audio and closes; the new copy waits for the
-old one to exit (it holds the single-instance socket and the device),
-builds its event loop with `with_x11()` because the pin is now on, and
-resumes from the file. Unpinning does the same back to Wayland. XWayland
-is checked by opening the display as winit would (`XOpenDisplay`) before
-it is chosen, at start-up when pinned and on the click, never otherwise:
-winit builds one event loop per process, so a failed X11 start could not
-fall back, and in GNOME the first X client starts XWayland.
+playing or paused) to a file of its own: in `$XDG_RUNTIME_DIR` when this
+user owns it with nobody else allowed in, in the temporary directory
+otherwise (on Linux usually the shared `/tmp`), with mode 0600 and a name
+nobody can guess either way. It then starts a new copy with
+`--restart-state <file> --after-pid <pid>`, stops the audio and closes.
+The new copy waits up to ten seconds for the old one to exit (it holds the
+single-instance socket and the device), then tries the socket for up to
+ten more if it is still taken, builds its event loop with `with_x11()`
+because the pin is now on, and resumes from the file. Unpinning does the
+same back to Wayland. XWayland is checked by opening the display as winit
+would (`XInitThreads`, `XOpenDisplay`) before it is chosen, at start-up
+when pinned and on the click, never otherwise, since in GNOME the first X
+client starts XWayland. winit builds one event loop per process, so when
+the window still cannot be made under XWayland (the display answered, the
+window or its OpenGL context did not), the process starts a copy of
+itself on Wayland with `--no-xwayland` and the same state or files.
 
 The playlist is a second native window (`show_viewport_immediate`) docked
 beside the player, as PotPlayer's playlist is:

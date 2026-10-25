@@ -56,8 +56,14 @@ pub fn xwayland_reachable() -> bool {
     let Ok(xlib) = x11_dl::xlib::Xlib::open() else {
         return false;
     };
-    // SAFETY: Xlib's own open and close on a display it hands back.
+    // SAFETY: Xlib's own calls. XInitThreads first, as winit makes it: in
+    // a threaded program it must come before any other Xlib call (libX11
+    // before 1.8 does not make it by itself), and a second call is a
+    // no-op. Then open and close a display it hands back.
     unsafe {
+        if (xlib.XInitThreads)() == 0 {
+            return false;
+        }
         let display = (xlib.XOpenDisplay)(std::ptr::null());
         if display.is_null() {
             return false;
@@ -81,16 +87,50 @@ pub fn wants_xwayland(pinned: bool) -> bool {
 /// Writes `resume` to a file of its own and starts a new QuickPlay that
 /// waits for this process to exit, then reads it. The caller closes.
 pub fn relaunch(resume: &Resume) -> io::Result<()> {
-    let state = write_state(resume)?;
-    let exe = std::env::current_exe()?;
-    let spawned = std::process::Command::new(exe)
-        .arg("--restart-state")
-        .arg(&state)
+    spawn_after_exit(resume, false)
+}
+
+/// The window could not be made under XWayland (the display answered but
+/// the window or its OpenGL context failed): start again on Wayland, where
+/// the pin does nothing but the player works, with what this process was
+/// given, the state of a restart (`resume`) or the files of a launch.
+/// Without this the queue of a restart would be lost, the previous process
+/// having closed already.
+pub fn relaunch_on_wayland(
+    resume: Option<&Resume>,
+    files: &[PathBuf],
+    enqueue: bool,
+) -> io::Result<()> {
+    let Some(resume) = resume else {
+        let mut command = after_exit_command()?;
+        command.arg("--no-xwayland");
+        if enqueue {
+            command.arg("--enqueue");
+        }
+        command.arg("--").args(files);
+        return command.spawn().map(drop);
+    };
+    spawn_after_exit(resume, true)
+}
+
+/// This executable, started to wait for this process to exit.
+fn after_exit_command() -> io::Result<std::process::Command> {
+    let mut command = std::process::Command::new(std::env::current_exe()?);
+    command
         .arg("--after-pid")
         .arg(std::process::id().to_string())
-        .stdin(std::process::Stdio::null())
-        .spawn();
-    if let Err(e) = spawned {
+        .stdin(std::process::Stdio::null());
+    Ok(command)
+}
+
+fn spawn_after_exit(resume: &Resume, no_xwayland: bool) -> io::Result<()> {
+    let state = write_state(resume)?;
+    let mut command = after_exit_command()?;
+    command.arg("--restart-state").arg(&state);
+    if no_xwayland {
+        command.arg("--no-xwayland");
+    }
+    if let Err(e) = command.spawn() {
         let _ = std::fs::remove_file(&state);
         return Err(e);
     }
@@ -175,15 +215,36 @@ fn owned_file(path: &Path) -> bool {
 
 /// Waits, up to ten seconds, for the QuickPlay that started this one to
 /// exit: it still holds the single-instance socket and the audio device.
-pub fn wait_for_exit(pid: u32) {
+///
+/// `false` when it is still running then. The caller carries on anyway,
+/// rather than leave nothing playing, and gives the socket more time
+/// ([`take_over_socket`]).
+pub fn wait_for_exit(pid: u32) -> bool {
     let deadline = Instant::now() + Duration::from_secs(10);
     let proc_dir = PathBuf::from(format!("/proc/{pid}"));
     while proc_dir.exists() {
         if Instant::now() >= deadline {
             tracing::warn!(pid, "the previous QuickPlay is still running");
-            return;
+            return false;
         }
         std::thread::sleep(Duration::from_millis(20));
+    }
+    true
+}
+
+/// After a restart the single-instance socket is this process's, once the
+/// previous one lets it go: tried again for up to ten seconds more while
+/// it is taken, so a slow exit does not leave QuickPlay without it (a later
+/// launch would then find nobody and open a second player).
+pub fn take_over_socket() -> io::Result<crate::ipc::Server> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        match crate::ipc::Server::start() {
+            Err(e) if e.kind() == io::ErrorKind::AddrInUse && Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            other => return other,
+        }
     }
 }
 

@@ -29,8 +29,10 @@ mod restart;
 mod ui;
 mod waveflow;
 
+use std::cell::Cell;
 use std::ffi::OsString;
 use std::path::PathBuf;
+use std::rc::Rc;
 
 use tracing_subscriber::EnvFilter;
 
@@ -80,6 +82,8 @@ struct Args {
     /// which this one waits out.
     restart_state: Option<PathBuf>,
     after_pid: Option<u32>,
+    /// Internal: XWayland failed to make the window, stay on Wayland.
+    no_xwayland: bool,
 }
 
 /// Options are read up to `--`, after which everything is a file, so a
@@ -100,6 +104,7 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> Args {
             Some("--after-pid") => {
                 parsed.after_pid = args.next().and_then(|p| p.to_str()?.parse().ok());
             }
+            Some("--no-xwayland") => parsed.no_xwayland = true,
             Some("--version" | "-V") => parsed.version = true,
             Some("--help" | "-h") => parsed.help = true,
             Some("--register") => parsed.register = true,
@@ -192,7 +197,14 @@ fn main() -> eframe::Result {
             Err(e) => tracing::warn!(error = %e, "single-instance check failed"),
         }
     }
-    let server = match ipc::Server::start() {
+    // A restart takes the socket over from the previous process, waiting
+    // for it to let go if it is slow to exit.
+    let started_server = if resume.is_some() {
+        restart::take_over_socket()
+    } else {
+        ipc::Server::start()
+    };
+    let server = match started_server {
         Ok(s) => Some(s),
         Err(e) if e.kind() == std::io::ErrorKind::AddrInUse && resume.is_none() => {
             let mut handed = false;
@@ -230,7 +242,7 @@ fn main() -> eframe::Result {
     let settings = Settings::load();
     // Pinned in a Wayland session whose XWayland answers: run under
     // XWayland, where a window can be kept on top (src/restart.rs).
-    let xwayland = restart::wants_xwayland(settings.always_on_top);
+    let xwayland = !args.no_xwayland && restart::wants_xwayland(settings.always_on_top);
     let options = native_options(&settings, xwayland);
 
     tracing::info!(
@@ -238,15 +250,30 @@ fn main() -> eframe::Result {
         files = files.len(),
         "starting WaveFlow QuickPlay"
     );
-    run_native(
+    // Kept for a start on Wayland if the window cannot be made under
+    // XWayland: winit builds one event loop per process, so that start is
+    // a new process.
+    let fallback = xwayland.then(|| (resume.clone(), files.clone()));
+    let created = Rc::new(Cell::new(false));
+    let app_created = Rc::clone(&created);
+    let result = run_native(
         "WaveFlow QuickPlay",
         options,
         Box::new(move |cc| {
+            app_created.set(true);
             let app = QuickPlayApp::new(cc, settings, files, server, resume, xwayland);
             tracing::info!(elapsed_ms = started.elapsed().as_millis(), "window ready");
             Ok(Box::new(app))
         }),
-    )
+    );
+    if let (Err(e), Some((resume, files)), false) = (&result, fallback, created.get()) {
+        tracing::warn!(error = %e, "no window under XWayland, starting again on Wayland");
+        match restart::relaunch_on_wayland(resume.as_ref(), &files, args.enqueue) {
+            Ok(()) => return Ok(()),
+            Err(e) => tracing::error!(error = %e, "starting again on Wayland failed"),
+        }
+    }
+    result
 }
 
 /// The window as the settings leave it, under X11 when `x11` (XWayland in

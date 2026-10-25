@@ -118,6 +118,8 @@ pub struct QuickPlayApp {
     /// Where the pending load starts. Until its `Loaded` arrives, the
     /// engine's clock still counts the previous track.
     load_start_ms: u64,
+    /// Whether the pending load is to play or wait paused once open.
+    load_autoplay: bool,
     /// Bumped by every `clear`: a folder scan requested before it belongs to
     /// a queue that is gone, and its result is dropped when it arrives.
     scan_generation: u64,
@@ -200,6 +202,7 @@ impl QuickPlayApp {
             lyrics: None,
             loaded_generation: 0,
             load_start_ms: 0,
+            load_autoplay: false,
             scan_generation: 0,
             capture: Capture::from_env(),
             ipc,
@@ -343,7 +346,10 @@ impl QuickPlayApp {
     /// goes back to what it was and the player says why.
     fn restart_for_pin(&mut self) {
         let (loaded, playing) = match self.state {
-            PlayerState::Playing | PlayerState::Loading => (true, true),
+            PlayerState::Playing => (true, true),
+            // A paused track being restored is loading too: it goes on as
+            // the load was asked to.
+            PlayerState::Loading => (true, self.load_autoplay),
             PlayerState::Paused => (true, false),
             PlayerState::Idle | PlayerState::Ended => (false, false),
         };
@@ -505,6 +511,7 @@ impl QuickPlayApp {
         self.seek_preview = None;
         self.state = PlayerState::Loading;
         self.load_start_ms = start_ms;
+        self.load_autoplay = autoplay;
         self.lyrics = Lyrics::load_for(&path);
         let generation = self.generation;
         self.send(AudioCmd::Load {
@@ -560,7 +567,10 @@ impl QuickPlayApp {
     fn toggle_play(&mut self) {
         match self.state {
             PlayerState::Playing => self.send(AudioCmd::Pause),
-            PlayerState::Paused | PlayerState::Loading => self.send(AudioCmd::Resume),
+            PlayerState::Paused | PlayerState::Loading => {
+                self.load_autoplay = true;
+                self.send(AudioCmd::Resume);
+            }
             PlayerState::Idle | PlayerState::Ended => {
                 if self.queue.current_index().is_some() {
                     self.restart_current(0);
