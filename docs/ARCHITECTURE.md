@@ -143,7 +143,9 @@ because the pin is now on, and resumes from the file. Unpinning does the
 same back to Wayland. XWayland is checked by opening the display as winit
 would (`XInitThreads`, `XOpenDisplay`) before it is chosen, at start-up
 when pinned and on the click, never otherwise, since in GNOME the first X
-client starts XWayland. winit builds one event loop per process, so when
+client starts XWayland; on the click it is asked on a thread, so the
+window does not freeze while XWayland starts, and further clicks wait for
+the answer. winit builds one event loop per process, so when
 the window still cannot be made under XWayland (the display answered, the
 window or its OpenGL context did not), the process starts a copy of
 itself on Wayland with `--no-xwayland` and the same state or files.

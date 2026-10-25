@@ -347,6 +347,34 @@ mod tests {
         assert_eq!(a.files, [PathBuf::from("-x.mp3")]);
     }
 
+    #[test]
+    fn the_restart_options_take_their_values() {
+        let a = parse(&[
+            "--after-pid",
+            "4242",
+            "--restart-state",
+            "/run/user/1000/state.json",
+            "--no-xwayland",
+            "a.flac",
+            "b.flac",
+        ]);
+        assert_eq!(a.after_pid, Some(4242));
+        assert_eq!(
+            a.restart_state,
+            Some(PathBuf::from("/run/user/1000/state.json"))
+        );
+        assert!(a.no_xwayland);
+        assert_eq!(a.files, [PathBuf::from("a.flac"), "b.flac".into()]);
+        assert!(a.unknown.is_empty());
+    }
+
+    #[test]
+    fn a_bad_pid_takes_only_its_own_value() {
+        let a = parse(&["--after-pid", "not-a-pid", "a.flac"]);
+        assert_eq!(a.after_pid, None);
+        assert_eq!(a.files, [PathBuf::from("a.flac")]);
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_file_name_need_not_be_unicode() {

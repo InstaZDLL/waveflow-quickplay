@@ -146,6 +146,9 @@ pub struct QuickPlayApp {
     /// Running under XWayland because the pin is on in a Wayland session
     /// (`src/restart.rs`): unpinning restarts under Wayland.
     xwayland: bool,
+    /// The answer of the XWayland probe a pin click started, off the UI
+    /// thread: in GNOME the first X client waits for XWayland to start.
+    pin_probe: Option<std::sync::mpsc::Receiver<bool>>,
 }
 
 impl QuickPlayApp {
@@ -219,6 +222,7 @@ impl QuickPlayApp {
                 move || ctx.request_repaint()
             }),
             xwayland,
+            pin_probe: None,
             settings,
         };
         if !files.is_empty() {
@@ -323,15 +327,48 @@ impl QuickPlayApp {
     /// on restarts QuickPlay under XWayland, switching it off restarts it
     /// under Wayland (`src/restart.rs`). Elsewhere it is a window level.
     fn toggle_pin(&mut self, ctx: &egui::Context) {
+        // A click while XWayland is being asked about waits for the answer.
+        if self.pin_probe.is_some() {
+            return;
+        }
         let pinned = !self.settings.always_on_top;
-        let wayland = restart::wayland_session();
-        // Asked on the click only: in GNOME the first X client starts
-        // XWayland.
-        let xwayland = pinned && wayland && restart::xwayland_reachable();
-        if pinned && wayland && !xwayland {
+        if pinned && restart::wayland_session() {
+            // Asked on the click only, since in GNOME the first X client
+            // starts XWayland, and on a thread of its own, since that
+            // client waits for it; the answer comes back in `logic`.
+            let (tx, rx) = std::sync::mpsc::channel();
+            let ctx = ctx.clone();
+            std::thread::spawn(move || {
+                let _ = tx.send(restart::xwayland_reachable());
+                ctx.request_repaint();
+            });
+            self.pin_probe = Some(rx);
+            return;
+        }
+        self.set_pin(ctx, pinned, false);
+    }
+
+    /// The probe of a pin click has answered: pin under XWayland, or say
+    /// why the pin cannot work.
+    fn finish_pin_probe(&mut self, ctx: &egui::Context) {
+        let Some(probe) = &self.pin_probe else {
+            return;
+        };
+        let reachable = match probe.try_recv() {
+            Ok(reachable) => reachable,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => false,
+        };
+        self.pin_probe = None;
+        if !reachable {
             self.set_status(self.t().status_pin_needs_xwayland);
             return;
         }
+        self.set_pin(ctx, true, true);
+    }
+
+    /// Switch the pin, restarting when it changes the window system.
+    fn set_pin(&mut self, ctx: &egui::Context, pinned: bool, xwayland: bool) {
         self.settings.always_on_top = pinned;
         self.settings.save();
         if xwayland != self.xwayland {
@@ -1391,6 +1428,7 @@ impl eframe::App for QuickPlayApp {
         self.pump_engine_events();
         self.pump_loader_events();
         self.pump_ipc_messages(ctx);
+        self.finish_pin_probe(ctx);
         self.handle_dropped_files(ctx);
         self.handle_shortcuts(ctx);
         self.track_window_size(ctx);
