@@ -46,6 +46,10 @@ eframe = { version = "0.36", default-features = false, features = [
     "x11",
 ] }
 egui = "0.36"
+# The font parser egui itself uses (same version, so one build): a system
+# fallback font is checked with it before egui is given the file, since
+# egui panics on one it cannot read.
+skrifa = { version = "0.44", default-features = false, features = ["std"] }
 
 # ── Audio transport (the same crates and versions the desktop engine uses) ─
 # Decoding, channel conversion and resampling come from `waveflow-core`

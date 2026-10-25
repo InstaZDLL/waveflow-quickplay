@@ -74,10 +74,19 @@ pub fn install_fonts(ctx: &egui::Context) {
         BOLD_FAMILY.into(),
         Arc::new(FontData::from_static(INTER_SEMIBOLD)),
     );
-    if let Some((path, bytes)) = SYSTEM_FALLBACK
-        .iter()
-        .find_map(|p| std::fs::read(p).ok().map(|b| (p.to_string(), b)))
-    {
+    // The first candidate that reads *and* parses: egui panics at start-up
+    // on font data it cannot parse, so a damaged or empty file is passed
+    // over for the next one, and the bundled fonts carry on without any.
+    if let Some((path, bytes)) = SYSTEM_FALLBACK.iter().find_map(|p| {
+        let bytes = std::fs::read(p).ok()?;
+        match skrifa::FontRef::from_index(&bytes, 0) {
+            Ok(_) => Some((p.to_string(), bytes)),
+            Err(err) => {
+                tracing::warn!(path = %p, %err, "system fallback font unreadable, skipped");
+                None
+            }
+        }
+    }) {
         tracing::debug!(%path, "system fallback font");
         fonts.font_data.insert(
             "system-fallback".into(),

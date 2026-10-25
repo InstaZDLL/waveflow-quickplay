@@ -4793,6 +4793,7 @@ dependencies = [
  "rtrb",
  "serde",
  "serde_json",
+ "skrifa",
  "sys-locale",
  "tracing",
  "tracing-subscriber",

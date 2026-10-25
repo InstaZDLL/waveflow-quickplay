@@ -134,12 +134,16 @@ pub fn show(
                 return;
             }
             let current = queue.current_index();
+            // Before `show_rows`, which works out the visible range and the
+            // scroll height from the spacing in force when it is called:
+            // set inside, rows were laid out 30 points apart while it
+            // counted 34.
+            ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
             egui::ScrollArea::vertical().auto_shrink(false).show_rows(
                 ui,
                 ROW_HEIGHT,
                 queue.len(),
                 |ui, range| {
-                    ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
                     for index in range {
                         let Some(entry) = queue.get(index) else {
                             continue;
