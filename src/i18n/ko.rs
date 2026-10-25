@@ -52,6 +52,8 @@ pub const STRINGS: Strings = Strings {
     status_cannot_open_waveflow: "WaveFlow를 열 수 없음: {e}",
     status_pin_needs_xwayland: "항상 위에 표시에는 XWayland가 필요하지만 이 세션에는 없습니다",
     status_cannot_restart: "QuickPlay를 다시 시작할 수 없음: {e}",
+    status_update_ready: "QuickPlay {v} 업데이트는 종료할 때 설치됩니다",
+    status_update_available: "QuickPlay {v} 업데이트를 사용할 수 있습니다",
     tip_open_in_waveflow: "WaveFlow에서 계속 듣기",
 
     // ── File dialog ────────────────────────────────────────────────────
@@ -62,6 +64,7 @@ pub const STRINGS: Strings = Strings {
     settings: "설정",
     language: "언어",
     language_system: "시스템 언어 ({l})",
+    settings_check_updates: "시작할 때 업데이트 확인",
     about: "정보",
     about_tagline: "WaveFlow와 함께하는 작은 플레이어: 곡을 더블 클릭하면 바로 재생됩니다.",
     about_version: "버전 {v}",

@@ -134,7 +134,8 @@ They are complementary, not two sizes of the same thing: QuickPlay deliberately 
 
 ### ⚙️ Settings and languages
 
-- The gear in the title bar opens a page in place of the controls: the interface language, and an about block with the version, the licence and the link to this repository. `Esc` or its close button brings the controls back.
+- The gear in the title bar opens a page in place of the controls: the interface language, an about block with the version, the licence and the link to this repository, and the update check. `Esc` or its close button brings the controls back.
+- **Updates**: at launch QuickPlay looks for a newer release. The Windows installer's copy, the macOS app and the AppImage download it in the background, check it against the release key and install it when you close QuickPlay: the next launch is the new version, and nothing that plays is cut. A `.deb` or an `.rpm` only says that the new version is out, with a link to it in the settings, and your package manager installs it. *Check for updates at launch*, at the bottom of the settings page, turns the check off.
 - **Eight languages**: English, French, German, Spanish, Italian, Simplified Chinese, Japanese and Korean. The system language is followed by default; a choice is kept in the settings file.
 - The file-manager entries follow the interface language: on Windows, picking another language rewrites the context-menu labels of the registered QuickPlay; the Linux desktop entry carries all eight and the desktop picks.
 
@@ -142,7 +143,7 @@ They are complementary, not two sizes of the same thing: QuickPlay deliberately 
 
 - Inter and Noto Sans CJK are embedded: Japanese, Korean and Chinese titles, and the interface in those languages, render the same on every machine.
 - Preferences live in their own file, `<config dir>/waveflow-quickplay/settings.json`, never read by the desktop app.
-- `RUST_LOG=debug` turns the log up; `QUICKPLAY_CAPTURE_DIR=<dir>` writes a PNG of the player window after start, for displays that cannot be grabbed from outside such as GNOME on Wayland. `QUICKPLAY_WAVEFLOW=<path>` points the WaveFlow button at another executable, such as a development build, without the version check.
+- `RUST_LOG=debug` turns the log up; `QUICKPLAY_CAPTURE_DIR=<dir>` writes a PNG of the player window after start, for displays that cannot be grabbed from outside such as GNOME on Wayland. `QUICKPLAY_WAVEFLOW=<path>` points the WaveFlow button at another executable, such as a development build, without the version check. `QUICKPLAY_UPDATE_URL=<url>` reads the update manifest from elsewhere, and is the only way a debug build looks for updates; the packages it lists must still be signed with the release key.
 
 ## Screenshots
 
@@ -303,6 +304,13 @@ The working set is dominated by the OpenGL driver and the decoded cover
   restarts it under Wayland. It stays under XWayland while pinned, which
   can look softer at fractional scaling unless the compositor scales X11
   windows natively. A session without XWayland cannot pin.
+- **Updates** start with 1.2.0: 1.0.0 and 1.1.0 do not look for them, so
+  moving on from those takes one install by hand. The check is one request
+  to GitHub at each launch (the release's `latest.json`, then the package
+  when there is a newer one). A `.deb` or an `.rpm` is never replaced by
+  QuickPlay, nor is a copy run from a read-only place (the disk image
+  itself, or an app macOS runs from a translocated copy because it was not
+  moved to Applications): those only say that a new version is out.
 - **Output device**: the OS default, opened at its default configuration
   (shared mode). No device picker, no exclusive mode. If the device goes
   away, the engine is released and the next play reopens the new default.

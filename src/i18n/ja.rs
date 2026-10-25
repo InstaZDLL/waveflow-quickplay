@@ -54,6 +54,8 @@ pub const STRINGS: Strings = Strings {
     status_pin_needs_xwayland:
         "常に手前に表示には XWayland が必要ですが、このセッションにはありません",
     status_cannot_restart: "QuickPlay を再起動できません：{e}",
+    status_update_ready: "QuickPlay {v} は終了時にインストールされます",
+    status_update_available: "QuickPlay {v} を利用できます",
     tip_open_in_waveflow: "WaveFlow で続ける",
 
     // ── File dialog ────────────────────────────────────────────────────
@@ -64,6 +66,7 @@ pub const STRINGS: Strings = Strings {
     settings: "設定",
     language: "言語",
     language_system: "システムの言語（{l}）",
+    settings_check_updates: "起動時にアップデートを確認",
     about: "このアプリについて",
     about_tagline: "WaveFlow の小さな相棒。曲をダブルクリックするだけで、すぐに音楽を楽しめます。",
     about_version: "バージョン {v}",

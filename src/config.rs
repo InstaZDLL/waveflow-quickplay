@@ -51,6 +51,8 @@ pub struct Settings {
     pub language: String,
     pub repeat: Repeat,
     pub shuffle: bool,
+    /// Look for a new version at launch (src/update.rs).
+    pub check_updates: bool,
 }
 
 impl Default for Settings {
@@ -67,6 +69,7 @@ impl Default for Settings {
             language: String::new(),
             repeat: Repeat::Off,
             shuffle: false,
+            check_updates: true,
         }
     }
 }

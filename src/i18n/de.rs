@@ -53,6 +53,8 @@ pub const STRINGS: Strings = Strings {
     status_cannot_open_waveflow: "WaveFlow lässt sich nicht öffnen: {e}",
     status_pin_needs_xwayland: "Immer im Vordergrund braucht XWayland, das in dieser Sitzung fehlt",
     status_cannot_restart: "QuickPlay lässt sich nicht neu starten: {e}",
+    status_update_ready: "QuickPlay {v} wird beim Beenden installiert",
+    status_update_available: "QuickPlay {v} ist verfügbar",
     tip_open_in_waveflow: "In WaveFlow fortsetzen",
 
     // ── File dialog ────────────────────────────────────────────────────
@@ -63,6 +65,7 @@ pub const STRINGS: Strings = Strings {
     settings: "Einstellungen",
     language: "Sprache",
     language_system: "Systemsprache ({l})",
+    settings_check_updates: "Beim Start nach Updates suchen",
     about: "Info",
     about_tagline: "Der kleine Player neben WaveFlow: Titel doppelt anklicken, sofort hören.",
     about_version: "Version {v}",

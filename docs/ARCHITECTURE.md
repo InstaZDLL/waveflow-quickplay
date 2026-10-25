@@ -30,6 +30,8 @@ waveflow-quickplay
    ├── src/i18n/          one strings table per language, system-language detection
    ├── src/ipc.rs         single instance: local socket, play / enqueue hand-over
    ├── src/waveflow.rs    finds WaveFlow, hands the playback over to it (core's `handoff`)
+   ├── src/update.rs      update check at launch, signed download, install on close
+   ├── src/restart.rs     restart under the other window system for the pin (Wayland)
    ├── src/integration.rs --register / --unregister (registry verbs, .desktop file)
    ├── src/platform.rs    Windows: owner link between the playlist window and the player
    ├── src/macos.rs       macOS: the files Finder opens (application:openURLs:)
@@ -250,6 +252,45 @@ version resource, on Windows; `CFBundleShortVersionString` on macOS;
 `dpkg-query`, `rpm` or `pacman` on Linux. No version read, no button.
 `QUICKPLAY_WAVEFLOW` overrides the lookup and skips the check, since a
 development build reports the version of the last release cut.
+
+## Updates
+
+At launch, unless `check_updates` is off in the settings, `src/update.rs`
+reads `latest.json` from the latest GitHub release on a thread of its own
+(`reqwest` blocking, the client `waveflow-core` already builds). The
+manifest gives the version and, per package QuickPlay can install by
+itself, its URL and its minisign signature: `windows-x86_64` (the NSIS
+installer), `darwin-universal` (the disk image) and
+`linux-x86_64-appimage`. The release workflow signs each with the release
+key (secret `QUICKPLAY_UPDATE_KEY`; the public half is `PUBLIC_KEY` in the
+module) under the trusted comment `waveflow-quickplay <version> <file>`.
+The manifest itself is not signed, so the app checks that comment against
+the version and the file name it was given: a genuine older package cannot
+be passed off as a newer version.
+
+How the copy was installed decides the rest (`Install::detect`):
+
+- an `uninstall.exe` beside the executable is the per-user NSIS install:
+  on close the installer runs with `/S /NS` (silent, no shortcut the user
+  removed comes back); it ends a QuickPlay still running before it copies;
+- an executable inside `<name>.app/Contents/MacOS/`, whose bundle and
+  folder this user can write, is replaced on close by a shell that waits
+  for the process to exit, mounts the disk image, copies the bundle beside
+  the old one with `ditto` and swaps the two, the old one coming back if
+  the swap fails (its output goes to a log beside the image in the cache);
+- `APPIMAGE` names the AppImage, whose folder this user can write: the new
+  file is copied beside it and renamed over it on close;
+- anything else (a `.deb` or an `.rpm` under `/usr`, a build from source, a
+  read-only copy) only shows that a new version is out, with a link to the
+  release in the settings.
+
+The package is downloaded to `<cache dir>/waveflow-quickplay/updates`,
+verified before it is kept, and verified again when a later launch finds it
+there instead of downloading it again (a restart for the pin closes without
+installing). A debug build looks only when `QUICKPLAY_UPDATE_URL` names a
+manifest to test with. A restart for the pin starts the AppImage again
+rather than the executable inside it, whose mount goes away with the
+process that is closing.
 
 ## Languages
 

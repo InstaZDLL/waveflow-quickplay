@@ -27,6 +27,7 @@ mod platform;
 mod queue;
 mod restart;
 mod ui;
+mod update;
 mod waveflow;
 
 use std::cell::Cell;

@@ -24,6 +24,7 @@ use crate::ui::{
     player, playlist, settings as settings_page, theme, Action, PlayerView, COMPACT_HEIGHT,
     CONTROLS_HEIGHT, TITLE_HEIGHT,
 };
+use crate::update;
 use crate::waveflow;
 
 pub const APP_ID: &str = "app.waveflow.quickplay";
@@ -149,6 +150,15 @@ pub struct QuickPlayApp {
     /// The answer of the XWayland probe a pin click started, off the UI
     /// thread: in GNOME the first X client waits for XWayland to start.
     pin_probe: Option<std::sync::mpsc::Receiver<bool>>,
+    /// The update check started at launch (`src/update.rs`), until it
+    /// answers.
+    update_check: Option<std::sync::mpsc::Receiver<update::Found>>,
+    /// A verified update, installed when QuickPlay closes.
+    update: Option<update::Update>,
+    /// A newer version this copy cannot install by itself.
+    update_available: Option<String>,
+    /// Closing to restart for the pin: an update waits for a real close.
+    restarting: bool,
 }
 
 impl QuickPlayApp {
@@ -223,8 +233,16 @@ impl QuickPlayApp {
             }),
             xwayland,
             pin_probe: None,
+            update_check: None,
+            update: None,
+            update_available: None,
+            restarting: false,
             settings,
         };
+        if app.settings.check_updates && update::wanted() {
+            let ctx = app.ctx.clone();
+            app.update_check = Some(update::spawn_check(move || ctx.request_repaint()));
+        }
         if !files.is_empty() {
             app.add_paths(&files, true);
         }
@@ -367,6 +385,39 @@ impl QuickPlayApp {
         self.set_pin(ctx, true, true);
     }
 
+    /// The update check has answered: a newer version is downloaded and
+    /// waits for the close, or this copy can only say that it is out.
+    fn finish_update_check(&mut self) {
+        let Some(check) = &self.update_check else {
+            return;
+        };
+        let found = match check.try_recv() {
+            Ok(found) => found,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.update_check = None;
+                return;
+            }
+        };
+        self.update_check = None;
+        // Switched off while it ran.
+        if !self.settings.check_updates {
+            return;
+        }
+        let (template, version) = match found {
+            update::Found::Ready(update) => {
+                let version = update.version.clone();
+                self.update = Some(update);
+                (self.t().status_update_ready, version)
+            }
+            update::Found::Available(version) => {
+                self.update_available = Some(version.clone());
+                (self.t().status_update_available, version)
+            }
+        };
+        self.set_status(fill(template, &[("v", &version)]));
+    }
+
     /// Switch the pin, restarting when it changes the window system.
     fn set_pin(&mut self, ctx: &egui::Context, pinned: bool, xwayland: bool) {
         self.settings.always_on_top = pinned;
@@ -405,6 +456,7 @@ impl QuickPlayApp {
                     playing,
                     "restarting for the pin"
                 );
+                self.restarting = true;
                 // Silent at once, and the device free for the new process.
                 if let Some(engine) = &self.engine {
                     engine.send(AudioCmd::Stop);
@@ -1069,6 +1121,15 @@ impl QuickPlayApp {
             }
             Action::CloseWindow => ctx.send_viewport_cmd(ViewportCommand::Close),
             Action::OpenInWaveFlow => self.open_in_waveflow(),
+            Action::SetCheckUpdates(on) => {
+                self.settings.check_updates = on;
+                self.settings.save();
+                // Switched off: a downloaded update is not installed
+                // either.
+                if !on {
+                    self.update = None;
+                }
+            }
             Action::ToggleSettings => self.settings_open = !self.settings_open,
             Action::SetLanguage(code) => {
                 self.settings.language =
@@ -1429,6 +1490,7 @@ impl eframe::App for QuickPlayApp {
         self.pump_loader_events();
         self.pump_ipc_messages(ctx);
         self.finish_pin_probe(ctx);
+        self.finish_update_check();
         self.handle_dropped_files(ctx);
         self.handle_shortcuts(ctx);
         self.track_window_size(ctx);
@@ -1505,10 +1567,14 @@ impl eframe::App for QuickPlayApp {
             {
                 actions.push(Action::ToggleSettings);
             }
-            let language = self.settings.language.clone();
+            let page = settings_page::Page {
+                language: &self.settings.language,
+                check_updates: self.settings.check_updates,
+                update_available: self.update_available.as_deref(),
+            };
             egui::CentralPanel::default()
                 .frame(theme::panel_frame())
-                .show(ui, |ui| settings_page::show(ui, t, &language, &mut actions));
+                .show(ui, |ui| settings_page::show(ui, t, &page, &mut actions));
         } else if view.expanded {
             egui::Panel::bottom("controls")
                 .exact_size(CONTROLS_HEIGHT)
@@ -1546,6 +1612,14 @@ impl eframe::App for QuickPlayApp {
         // Stop the decoder and close the device before the window goes.
         if let Some(mut engine) = self.engine.take() {
             engine.shutdown();
+        }
+        // Last, once nothing is left to save: on Windows the installer ends
+        // whatever QuickPlay still runs. Not when closing for the pin's
+        // restart, which reads the update again from the cache.
+        if let Some(update) = self.update.take().filter(|_| !self.restarting) {
+            if let Err(err) = update::install(update) {
+                tracing::error!(%err, "the update could not be installed");
+            }
         }
     }
 }
