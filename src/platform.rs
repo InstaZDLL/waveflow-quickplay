@@ -114,3 +114,71 @@ pub fn attach_parent_console() {
 
 #[cfg(not(windows))]
 pub fn attach_parent_console() {}
+
+/// Whether process `pid` runs as the same user as this one: the user SIDs
+/// of the two process tokens are equal. `false` when the other token
+/// cannot be read, as for another user's process, which is the case this
+/// tells apart.
+#[cfg(windows)]
+pub fn same_user_process(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::Security::{
+        EqualSid, GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER,
+    };
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+
+    /// The `TOKEN_USER` of `process`, in a buffer aligned for it.
+    ///
+    /// SAFETY: `process` is a valid process handle.
+    unsafe fn token_user(process: HANDLE) -> Option<Vec<u64>> {
+        let mut token: HANDLE = std::ptr::null_mut();
+        // SAFETY: documented calls; `token` is closed below, the buffer is
+        // sized from the length the first call reports.
+        unsafe {
+            if OpenProcessToken(process, TOKEN_QUERY, &mut token) == 0 {
+                return None;
+            }
+            let mut len = 0u32;
+            GetTokenInformation(token, TokenUser, std::ptr::null_mut(), 0, &mut len);
+            let mut buf = vec![0u64; (len as usize).div_ceil(8)];
+            let ok = len > 0
+                && GetTokenInformation(token, TokenUser, buf.as_mut_ptr().cast(), len, &mut len)
+                    != 0;
+            CloseHandle(token);
+            ok.then_some(buf)
+        }
+    }
+
+    // SAFETY: the pseudo-handle of this process is always valid; the other
+    // handle is checked and closed; both buffers start with a TOKEN_USER
+    // written by GetTokenInformation, whose SIDs point into the buffers.
+    unsafe {
+        let Some(mine_buf) = token_user(GetCurrentProcess()) else {
+            return false;
+        };
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if process.is_null() {
+            return false;
+        }
+        let theirs = token_user(process);
+        CloseHandle(process);
+        let Some(theirs_buf) = theirs else {
+            return false;
+        };
+        let mine = &*mine_buf.as_ptr().cast::<TOKEN_USER>();
+        let theirs = &*theirs_buf.as_ptr().cast::<TOKEN_USER>();
+        EqualSid(mine.User.Sid, theirs.User.Sid) != 0
+    }
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    #[test]
+    fn this_process_is_ours_the_system_one_is_not() {
+        assert!(super::same_user_process(std::process::id()));
+        // PID 4 is the System process, which no user runs.
+        assert!(!super::same_user_process(4));
+    }
+}

@@ -6,8 +6,10 @@
 //! mode-0700 directory (`$XDG_RUNTIME_DIR`, or `$TMPDIR` on macOS) where
 //! there is one, so no other local user can reach or squat it; a named pipe
 //! on Windows, whose default DACL lets only the owner write; the Linux
-//! abstract namespace only as a last resort, where both ends check that the
-//! other runs as the same user. Messages are capped in size and count. What
+//! abstract namespace only as a last resort. Pipe and abstract names are
+//! machine-wide, so another user could create ours first: there both ends
+//! check that the other runs as the same user. Messages are capped in size
+//! and count. What
 //! crosses the socket is a list of file paths to play, nothing secret.
 //! Protocol, UTF-8 lines: `play` or `enqueue`, one absolute path per line,
 //! an empty line; the server answers `ok` once it has queued the message,
@@ -68,8 +70,9 @@ const MAX_CLIENTS: usize = 8;
 /// Messages taken and not yet picked up by the UI. One more is refused.
 const MAX_QUEUED: usize = 64;
 
-/// The socket's name, its file when it has one, and whether it is in the
-/// Linux abstract namespace (no file, no permissions: peers are checked).
+/// The socket's name, its file when it has one, and whether its name is
+/// machine-wide (a Windows pipe, the Linux abstract namespace): anyone can
+/// take such a name first, so each end checks who the other runs as.
 struct Endpoint {
     name: Name<'static>,
     path: Option<PathBuf>,
@@ -92,7 +95,7 @@ fn endpoint() -> io::Result<Endpoint> {
         Ok(Endpoint {
             name: base.to_ns_name::<GenericNamespaced>()?,
             path: None,
-            check_peer: !cfg!(windows),
+            check_peer: true,
         })
     } else {
         let dir = private_dir
@@ -157,7 +160,15 @@ fn same_user(conn: &Stream) -> bool {
         .is_some_and(|uid| uid == me)
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn same_user(conn: &Stream) -> bool {
+    conn.peer_creds()
+        .ok()
+        .and_then(|c| c.pid())
+        .is_some_and(crate::platform::same_user_process)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn same_user(_conn: &Stream) -> bool {
     true
 }

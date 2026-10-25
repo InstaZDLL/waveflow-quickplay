@@ -163,8 +163,11 @@ holds a line break is not sent: that launch opens a window of its own. The
 server reads each connection on a thread of its own (eight at most, with a
 read timeout on Unix sockets) and the client gives up after three seconds,
 so a client that never finishes, or an instance that never answers, holds
-up nothing else. On the abstract namespace, which has no permissions, each
-end checks that the other runs as the same user; the runtime directory is
+up nothing else. Pipe names and the abstract namespace are machine-wide,
+so another user could take the name first: there each end checks that the
+other runs as the same user (the token's user SID on Windows, the peer's
+uid on Linux), and a launch that finds a stranger opens its own window. The
+runtime directory is
 only used when this user owns it and nobody else can enter it. Explorer
 starts one process per selected file, so `play` messages arriving within
 half a second of each other are merged into one queue replacement.
