@@ -188,10 +188,14 @@ jobs:
       - name: Checksums
         shell: pwsh
         run: |
-          Get-ChildItem target/packager/*.exe | ForEach-Object {
+          $lines = Get-ChildItem target/packager/*.exe | ForEach-Object {
             "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name
-          } | Set-Content target/packager/SHA256SUMS-windows.txt -Encoding ascii
-          Get-Content target/packager/SHA256SUMS-windows.txt
+          }
+          # LF line ends, as sha256sum writes them: Set-Content writes CRLF,
+          # and `sha256sum -c` on Linux or macOS then looks for "….exe\r".
+          $sums = Join-Path $PWD target/packager/SHA256SUMS-windows.txt
+          [IO.File]::WriteAllText($sums, (($lines -join "`n") + "`n"))
+          Get-Content $sums
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows
