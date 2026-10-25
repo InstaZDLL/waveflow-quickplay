@@ -3,6 +3,7 @@
 //! shuffle).
 
 use std::cell::Cell;
+use std::collections::HashSet;
 use std::hash::{BuildHasher, Hasher};
 use std::path::{Path, PathBuf};
 
@@ -50,12 +51,16 @@ fn file_stem(path: &Path) -> &str {
 pub struct Queue {
     entries: Vec<TrackEntry>,
     current: Option<usize>,
+    /// The current row was removed and the cursor sits on the row that
+    /// moved up into its place, which has not played: Next plays that row
+    /// rather than the one after it.
+    cursor_pending: bool,
     next_id: u64,
     repeat: Repeat,
     shuffle: bool,
     /// Ids played in the current shuffle round, so every track comes once
     /// before any comes again. Emptied when the round is complete.
-    played: Vec<u64>,
+    played: HashSet<u64>,
     /// Ids in the order they were played, for Previous under shuffle.
     history: Vec<u64>,
     /// xorshift state for the shuffle draws, in a `Cell` so `next_index`
@@ -72,10 +77,11 @@ impl Default for Queue {
         Self {
             entries: Vec::new(),
             current: None,
+            cursor_pending: false,
             next_id: 0,
             repeat: Repeat::Off,
             shuffle: false,
-            played: Vec::new(),
+            played: HashSet::new(),
             history: Vec::new(),
             rng: Cell::new(seed | 1),
         }
@@ -101,8 +107,14 @@ impl Queue {
         self.shuffle = shuffle;
         self.played.clear();
         self.history.clear();
-        if let Some(id) = self.current().map(|e| e.id) {
-            self.played.push(id);
+        // A row only waiting under the cursor has not played: it stays
+        // free for the round's first draw.
+        if let Some(id) = self
+            .current()
+            .filter(|_| !self.cursor_pending)
+            .map(|e| e.id)
+        {
+            self.played.insert(id);
             self.history.push(id);
         }
     }
@@ -119,9 +131,13 @@ impl Queue {
             .all(|e| self.played.contains(&e.id))
     }
 
-    /// Playable rows other than the current one.
+    /// Playable rows other than the current one; a row only waiting under
+    /// the cursor ([`Self::cursor_pending`]) counts among them.
     fn others(&self) -> impl Iterator<Item = usize> + '_ {
-        let current_id = self.current().map(|e| e.id);
+        let current_id = self
+            .current()
+            .filter(|_| !self.cursor_pending)
+            .map(|e| e.id);
         (0..self.entries.len())
             .filter(move |i| self.playable(*i) && Some(self.entries[*i].id) != current_id)
     }
@@ -203,6 +219,7 @@ impl Queue {
 
     fn move_cursor(&mut self, index: Option<usize>, back: bool) {
         self.current = index.filter(|i| *i < self.entries.len());
+        self.cursor_pending = false;
         let Some(id) = self.current().map(|e| e.id) else {
             return;
         };
@@ -211,17 +228,13 @@ impl Queue {
                 Some(k) => self.history.truncate(k + 1),
                 None => self.history.push(id),
             }
-            if !self.played.contains(&id) {
-                self.played.push(id);
-            }
+            self.played.insert(id);
             return;
         }
         if self.round_complete() {
             self.played.clear();
         }
-        if !self.played.contains(&id) {
-            self.played.push(id);
-        }
+        self.played.insert(id);
         if self.history.last() != Some(&id) {
             self.history.push(id);
         }
@@ -255,12 +268,20 @@ impl Queue {
         self.played.retain(|p| *p != id);
         match self.current {
             Some(c) if c == index => {
-                // The cursor keeps its position so Next plays what moved
-                // up into it; clamp when the last row went.
+                // The cursor keeps its position, on the row that moved up
+                // into it: Play plays that row, and so does Next, unless
+                // shuffle already played it in this round, in which case
+                // Next draws among the rows still unplayed. When the last
+                // row went, nothing moved up: it clamps to the new last
+                // row, which Play plays again and Next goes past.
                 if self.entries.is_empty() {
                     self.current = None;
+                    self.cursor_pending = false;
                 } else if c >= self.entries.len() {
                     self.current = Some(self.entries.len() - 1);
+                    self.cursor_pending = false;
+                } else {
+                    self.cursor_pending = true;
                 }
                 true
             }
@@ -275,6 +296,7 @@ impl Queue {
     pub fn clear(&mut self) {
         self.entries.clear();
         self.current = None;
+        self.cursor_pending = false;
         self.played.clear();
         self.history.clear();
     }
@@ -301,7 +323,11 @@ impl Queue {
     }
 
     fn sequential_next(&self) -> Option<usize> {
-        let start = self.current.map_or(0, |c| c + 1);
+        let start = match self.current {
+            Some(c) if self.cursor_pending => c,
+            Some(c) => c + 1,
+            None => 0,
+        };
         let after = (start..self.entries.len()).find(|i| self.playable(*i));
         match (after, self.repeat) {
             (Some(i), _) => Some(i),
@@ -315,6 +341,22 @@ impl Queue {
     /// shuffle played before.
     pub fn prev_index(&self) -> Option<usize> {
         let end = self.current?;
+        if self.shuffle && self.cursor_pending {
+            // The row under the cursor is not the one that last played:
+            // back is the last track that did, other than that row, which
+            // the history holds too when shuffle played it earlier.
+            let under = self.entries[end].id;
+            return self
+                .history
+                .iter()
+                .rev()
+                .filter(|h| **h != under)
+                .find_map(|h| {
+                    self.entries
+                        .iter()
+                        .position(|e| e.id == *h && e.failed.is_none())
+                });
+        }
         if self.shuffle {
             let id = self.entries[end].id;
             let at = self.history.iter().rposition(|h| *h == id)?;
@@ -327,7 +369,7 @@ impl Queue {
         let before = (0..end).rev().find(|i| self.playable(*i));
         match (before, self.repeat) {
             (Some(i), _) => Some(i),
-            (None, Repeat::All) => (end + 1..self.entries.len())
+            (None, Repeat::All) => (end + usize::from(!self.cursor_pending)..self.entries.len())
                 .rev()
                 .find(|i| self.playable(*i)),
             (None, _) => None,
@@ -369,6 +411,61 @@ mod tests {
         assert_eq!(q.current_index(), Some(0));
         assert!(q.remove(0));
         assert_eq!(q.current_index(), None);
+    }
+
+    #[test]
+    fn next_after_removing_the_current_row_plays_what_moved_up() {
+        let mut q = queue_of(3);
+        q.set_current(Some(0));
+        assert!(q.remove(0));
+        assert_eq!(q.next_index(), Some(0), "\"1\" moved up and comes next");
+        assert_eq!(q.get(0).map(|e| e.title()), Some("1"));
+        let mut two = queue_of(2);
+        two.set_current(Some(0));
+        two.remove(0);
+        assert!(two.has_next());
+        assert_eq!(two.next_index(), Some(0));
+        // Once it plays, the cursor is an ordinary one again.
+        q.set_current(Some(0));
+        assert_eq!(q.next_index(), Some(1));
+        // A track that survives keeps the usual next.
+        let mut q = queue_of(3);
+        q.set_current(Some(1));
+        q.remove(0);
+        assert_eq!(q.next_index(), Some(1));
+    }
+
+    #[test]
+    fn under_shuffle_the_row_that_moved_up_can_be_drawn() {
+        let mut q = queue_of(2);
+        q.set_current(Some(0));
+        q.set_shuffle(true);
+        q.remove(0);
+        assert!(q.has_next());
+        assert_eq!(q.next_index(), Some(0));
+        assert_eq!(q.prev_index(), None, "nothing that played is left");
+        // Shuffle switched on after the removal: the row is still unplayed.
+        let mut q = queue_of(2);
+        q.set_current(Some(0));
+        q.remove(0);
+        q.set_shuffle(true);
+        assert_eq!(q.next_index(), Some(0));
+        assert_eq!(q.prev_index(), None);
+    }
+
+    /// The row that moved up had already played in the round: Previous
+    /// goes to the track before, not to that row itself.
+    #[test]
+    fn previous_after_removal_skips_the_row_under_the_cursor() {
+        let mut q = queue_of(3);
+        q.set_current(Some(0));
+        q.set_shuffle(true);
+        q.set_current(Some(2));
+        q.set_current(Some(1));
+        // History 0, 2, 1; removing 1 brings 2 under the cursor.
+        assert!(q.remove(1));
+        assert_eq!(q.current().map(|e| e.title()), Some("2"));
+        assert_eq!(q.prev_index(), Some(0));
     }
 
     #[test]

@@ -75,6 +75,10 @@ impl Capture {
                 tracing::warn!(w, h, "capture: unexpected buffer size");
                 continue;
             };
+            if let Err(e) = std::fs::create_dir_all(&self.dir) {
+                tracing::warn!(dir = %self.dir.display(), error = %e, "capture: no directory");
+                continue;
+            }
             match buf.save(&path) {
                 Ok(()) => tracing::info!(path = %path.display(), w, h, "capture written"),
                 Err(e) => tracing::warn!(path = %path.display(), error = %e, "capture failed"),

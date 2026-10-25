@@ -1,5 +1,8 @@
 /target
 /.claude
+# Agent skills installed locally (npx skills), not part of the project.
+/.agents
+/skills-lock.json
 *.json.tmp
 # Stray captures from local test scripts; real screenshots live in docs/screenshots.
 /*.png

@@ -22,9 +22,27 @@ use crate::i18n::{Lang, Strings};
 fn exe_path() -> io::Result<PathBuf> {
     let exe = std::env::current_exe()?;
     let exe = exe.canonicalize().unwrap_or(exe);
-    // `canonicalize` yields `\\?\C:\…` on Windows; the shell wants `C:\…`.
-    let s = exe.to_string_lossy();
-    Ok(PathBuf::from(s.strip_prefix(r"\\?\").unwrap_or(&s)))
+    // The registry and the desktop entry are text: a path that is not
+    // Unicode cannot be written into them unchanged, so it is refused
+    // rather than registered as another, nonexistent one.
+    let s = exe.to_str().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{} is not valid Unicode", exe.display()),
+        )
+    })?;
+    Ok(PathBuf::from(strip_verbatim(s)))
+}
+
+/// `canonicalize` yields `\\?\C:\…`, and `\\?\UNC\server\share\…` for a
+/// network share or a mapped drive, on Windows; the shell wants `C:\…` and
+/// `\\server\share\…`.
+fn strip_verbatim(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else {
+        path.strip_prefix(r"\\?\").unwrap_or(path).to_string()
+    }
 }
 
 /// `lang` is the language of the menu labels: on Windows the registry holds
@@ -228,9 +246,7 @@ mod platform {
         for unit in script.encode_utf16() {
             bytes.extend_from_slice(&unit.to_le_bytes());
         }
-        let path =
-            std::env::temp_dir().join(format!("waveflow-quickplay-{}.reg", std::process::id()));
-        std::fs::write(&path, bytes)?;
+        let path = write_new_script(&bytes)?;
         // CREATE_NO_WINDOW: called from the GUI too, where a console
         // window flashing up for reg.exe would be a surprise.
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -244,6 +260,38 @@ mod platform {
             Ok(s) if s.success() => Ok(()),
             Ok(s) => Err(io::Error::other(format!("reg import exited with {s}"))),
             Err(e) => Err(e),
+        }
+    }
+
+    /// A script file of this call's own: two imports can run at once (two
+    /// quick language changes each relabel on a thread), and neither may
+    /// overwrite or delete the other's. Created new, never opened over a
+    /// file that is already there.
+    fn write_new_script(bytes: &[u8]) -> io::Result<PathBuf> {
+        use std::io::Write;
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static NEXT: AtomicU32 = AtomicU32::new(0);
+        loop {
+            let n = NEXT.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir()
+                .join(format!("waveflow-quickplay-{}-{n}.reg", std::process::id()));
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+            {
+                Ok(mut file) => {
+                    if let Err(e) = file.write_all(bytes) {
+                        drop(file);
+                        let _ = std::fs::remove_file(&path);
+                        return Err(e);
+                    }
+                    return Ok(path);
+                }
+                // Left by an earlier process with the same id: next name.
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists && n < 1000 => {}
+                Err(e) => return Err(e),
+            }
         }
     }
 
@@ -348,16 +396,41 @@ mod platform {
             .join(format!("{DESKTOP_ID}.png")))
     }
 
-    /// Desktop-entry quoting for the Exec key.
+    /// One argument of the Exec key, quoted: `"`, `` ` ``, `$` and `\`
+    /// escaped inside the quotes, and `%` doubled, since a single one
+    /// starts a field code. The whole value then goes through
+    /// [`desktop_string`].
     fn exec_quote(s: &str) -> String {
         let mut out = String::from("\"");
         for c in s.chars() {
-            if matches!(c, '"' | '`' | '$' | '\\') {
-                out.push('\\');
+            match c {
+                '"' | '`' | '$' | '\\' => {
+                    out.push('\\');
+                    out.push(c);
+                }
+                '%' => out.push_str("%%"),
+                _ => out.push(c),
             }
-            out.push(c);
         }
         out.push('"');
+        out
+    }
+
+    /// A desktop-entry string value: backslashes and the characters that
+    /// would end or break the line escaped. Exec and TryExec are string
+    /// values, so a literal backslash in a path is `\\\\` in Exec (quoted,
+    /// then escaped) and `\\` in TryExec.
+    fn desktop_string(s: &str) -> String {
+        let mut out = String::with_capacity(s.len());
+        for c in s.chars() {
+            match c {
+                '\\' => out.push_str(r"\\"),
+                '\n' => out.push_str(r"\n"),
+                '\r' => out.push_str(r"\r"),
+                '\t' => out.push_str(r"\t"),
+                _ => out.push(c),
+            }
+        }
         out
     }
 
@@ -390,14 +463,20 @@ mod platform {
         out
     }
 
-    pub fn register(exe: &std::path::Path, _t: &Strings) -> io::Result<String> {
-        let exe_s = exe.to_string_lossy();
-        let quoted = exec_quote(&exe_s);
+    fn desktop_entry(exe: &str) -> String {
+        let play = desktop_string(&format!("{} %F", exec_quote(exe)));
+        let enqueue_exec = desktop_string(&format!("{} --enqueue %F", exec_quote(exe)));
+        let try_exec = desktop_string(exe);
         let comment = localised("Comment", |t| t.desktop_comment);
         let enqueue = localised("Name", |t| t.action_add_to_playlist);
-        let entry = format!(
-            "[Desktop Entry]\nType=Application\nName=WaveFlow QuickPlay\n{comment}Exec={quoted} %F\nTryExec={exe_s}\nIcon={DESKTOP_ID}\nTerminal=false\nCategories=AudioVideo;Audio;Player;\nMimeType={MIME_TYPES}\nStartupWMClass={DESKTOP_ID}\nActions=Enqueue;\n\n[Desktop Action Enqueue]\n{enqueue}Exec={quoted} --enqueue %F\n"
-        );
+        format!(
+            "[Desktop Entry]\nType=Application\nName=WaveFlow QuickPlay\n{comment}Exec={play}\nTryExec={try_exec}\nIcon={DESKTOP_ID}\nTerminal=false\nCategories=AudioVideo;Audio;Player;\nMimeType={MIME_TYPES}\nStartupWMClass={DESKTOP_ID}\nActions=Enqueue;\n\n[Desktop Action Enqueue]\n{enqueue}Exec={enqueue_exec}\n"
+        )
+    }
+
+    pub fn register(exe: &std::path::Path, _t: &Strings) -> io::Result<String> {
+        // `exe_path` has made sure the path is Unicode.
+        let entry = desktop_entry(&exe.to_string_lossy());
         let desktop = desktop_file()?;
         let icon = icon_file()?;
         for p in [&desktop, &icon] {
@@ -416,14 +495,39 @@ mod platform {
 
     pub fn unregister() -> io::Result<String> {
         for p in [desktop_file()?, icon_file()?] {
-            if let Err(e) = std::fs::remove_file(&p) {
-                if p.exists() {
-                    return Err(e);
-                }
+            match std::fs::remove_file(&p) {
+                Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
+                _ => {}
             }
         }
         refresh();
         Ok("removed the desktop entry and the icon.".into())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn exec_and_try_exec_carry_any_path_unchanged() {
+            let entry = desktop_entry("/opt/a\\b%c$d \"e\"/qp");
+            assert!(
+                entry.contains("\nExec=\"/opt/a\\\\\\\\b%%c\\\\$d \\\\\"e\\\\\"/qp\" %F\n"),
+                "{entry}"
+            );
+            assert!(
+                entry.contains("\nTryExec=/opt/a\\\\b%c$d \"e\"/qp\n"),
+                "{entry}"
+            );
+            assert!(entry
+                .contains("\nExec=\"/opt/a\\\\\\\\b%%c\\\\$d \\\\\"e\\\\\"/qp\" --enqueue %F\n"));
+            let entry = desktop_entry("/opt/new\nline/qp");
+            assert!(
+                entry.contains("\nExec=\"/opt/new\\nline/qp\" %F\n"),
+                "{entry}"
+            );
+            assert!(!entry.contains("new\nline"));
+        }
     }
 }
 
@@ -458,5 +562,20 @@ mod platform {
     #[cfg(not(target_os = "macos"))]
     pub fn unregister() -> io::Result<String> {
         Err(io::Error::other("nothing to remove on this platform."))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strip_verbatim;
+
+    #[test]
+    fn verbatim_prefixes_come_off_shares_included() {
+        assert_eq!(strip_verbatim(r"\\?\C:\QP\qp.exe"), r"C:\QP\qp.exe");
+        assert_eq!(
+            strip_verbatim(r"\\?\UNC\server\share\qp.exe"),
+            r"\\server\share\qp.exe"
+        );
+        assert_eq!(strip_verbatim("/usr/bin/qp"), "/usr/bin/qp");
     }
 }

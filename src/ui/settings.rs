@@ -31,8 +31,27 @@ pub fn show(ui: &mut Ui, t: &'static Strings, language: &str, actions: &mut Vec<
                 actions.push(Action::ToggleSettings);
             }
             ui.add_space(4.0);
-            language_picker(ui, t, language, actions);
-            ui.label(RichText::new(t.language).size(12.0).color(theme::TEXT_DIM));
+            // What is left between the title and the close button. The
+            // "Language" label goes first when the bar is narrow (320
+            // points fit no more than the picker), then the picker narrows
+            // and truncates its text.
+            let label = RichText::new(t.language).size(12.0).color(theme::TEXT_DIM);
+            let label_width = ui
+                .painter()
+                .layout_no_wrap(
+                    t.language.to_string(),
+                    egui::FontId::proportional(12.0),
+                    theme::TEXT_DIM,
+                )
+                .size()
+                .x;
+            let room = ui.available_width() - ui.spacing().item_spacing.x;
+            let with_label = room >= PICKER_WIDTH + ui.spacing().item_spacing.x + label_width;
+            let width = room.clamp(PICKER_MIN_WIDTH, PICKER_WIDTH);
+            language_picker(ui, t, language, width, actions);
+            if with_label {
+                ui.label(label);
+            }
         });
     });
 
@@ -90,25 +109,46 @@ pub fn show(ui: &mut Ui, t: &'static Strings, language: &str, actions: &mut Vec<
         });
 }
 
-/// One combo: the system entry first, then every language under its own
-/// name. Picking one pushes [`Action::SetLanguage`].
-fn language_picker(ui: &mut Ui, t: &Strings, language: &str, actions: &mut Vec<Action>) {
+/// The language picker's width when there is room, and the least it
+/// narrows to.
+const PICKER_WIDTH: f32 = 190.0;
+const PICKER_MIN_WIDTH: f32 = 110.0;
+
+/// One combo, `width` points wide: the system entry first, then every
+/// language under its own name. Picking one pushes [`Action::SetLanguage`].
+fn language_picker(
+    ui: &mut Ui,
+    t: &Strings,
+    language: &str,
+    width: f32,
+    actions: &mut Vec<Action>,
+) {
     let selected = Lang::from_code(language);
     let system_label = fill(t.language_system, &[("l", Lang::system().native_name())]);
     let current = selected.map_or_else(|| system_label.clone(), |l| l.native_name().to_string());
-    egui::ComboBox::from_id_salt("language")
-        .selected_text(RichText::new(current).size(12.0))
-        .width(190.0)
-        .height(96.0)
-        .show_ui(ui, |ui| {
-            let mut pick = |ui: &mut Ui, code: &str, label: &str, is_selected: bool| {
-                if ui.selectable_label(is_selected, label).clicked() && !is_selected {
-                    actions.push(Action::SetLanguage(code.to_string()));
-                }
-            };
-            pick(ui, "", &system_label, selected.is_none());
-            for lang in Lang::ALL {
-                pick(ui, lang.code(), lang.native_name(), selected == Some(lang));
-            }
-        });
+    // In a box of its own `width`, against which the selected text
+    // truncates: a long system entry does not widen the combo.
+    let height = ui.spacing().interact_size.y;
+    ui.allocate_ui_with_layout(
+        vec2(width, height),
+        Layout::right_to_left(Align::Center),
+        |ui| {
+            egui::ComboBox::from_id_salt("language")
+                .selected_text(RichText::new(current).size(12.0))
+                .width(width)
+                .wrap_mode(egui::TextWrapMode::Truncate)
+                .height(96.0)
+                .show_ui(ui, |ui| {
+                    let mut pick = |ui: &mut Ui, code: &str, label: &str, is_selected: bool| {
+                        if ui.selectable_label(is_selected, label).clicked() && !is_selected {
+                            actions.push(Action::SetLanguage(code.to_string()));
+                        }
+                    };
+                    pick(ui, "", &system_label, selected.is_none());
+                    for lang in Lang::ALL {
+                        pick(ui, lang.code(), lang.native_name(), selected == Some(lang));
+                    }
+                });
+        },
+    );
 }

@@ -6,17 +6,29 @@
 //! mode-0700 directory (`$XDG_RUNTIME_DIR`, or `$TMPDIR` on macOS) where
 //! there is one, so no other local user can reach or squat it; a named pipe
 //! on Windows, whose default DACL lets only the owner write; the Linux
-//! abstract namespace only as a last resort. Messages are capped in size
-//! and count. What crosses the socket is a list of file paths to play,
-//! nothing secret. Protocol, UTF-8 lines: `play` or `enqueue`, one absolute
-//! path per line, an empty line; the server answers `ok` once it has queued
-//! the message, so the client can exit knowing the files were taken.
+//! abstract namespace only as a last resort. Pipe and abstract names are
+//! machine-wide, so another user could create ours first: there both ends
+//! check that the other runs as the same user. Messages are capped in size
+//! and count. What
+//! crosses the socket is a list of file paths to play, nothing secret.
+//! Protocol, UTF-8 lines: `play` or `enqueue`, one absolute path per line,
+//! an empty line; the server answers `ok` once it has queued the message,
+//! so the client can exit knowing the files were taken. A message that is
+//! cut short, too large or unreadable gets no `ok`.
+//!
+//! Every connection is read on a thread of its own, bounded in number,
+//! against one deadline for the whole message ([`MESSAGE_DEADLINE`]), and
+//! the client gives up after [`CLIENT_TIMEOUT`]: a client that connects and
+//! never finishes cannot hold up the launches after it, and a server that
+//! never answers cannot hang one.
 
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
-use crossbeam_channel::{Receiver, Sender};
+use crossbeam_channel::{Receiver, Sender, TrySendError};
 use interprocess::local_socket::{
     prelude::*, GenericFilePath, GenericNamespaced, ListenerOptions, Name, Stream,
 };
@@ -48,7 +60,27 @@ pub struct Message {
 /// the UI (`request_repaint`) when a message arrives.
 pub type CtxSlot = Arc<Mutex<Option<egui::Context>>>;
 
-fn socket_name() -> io::Result<(Name<'static>, Option<PathBuf>)> {
+/// Longest a hand-off may take, connection to answer. Named pipes have no
+/// read timeout, so the exchange runs on a thread and is waited for.
+const CLIENT_TIMEOUT: Duration = Duration::from_secs(3);
+/// Longest the server waits for a client to finish its message, all reads
+/// together.
+const MESSAGE_DEADLINE: Duration = Duration::from_secs(2);
+/// Connections read at the same time. One more is closed unread.
+const MAX_CLIENTS: usize = 8;
+/// Messages taken and not yet picked up by the UI. One more is refused.
+const MAX_QUEUED: usize = 64;
+
+/// The socket's name, its file when it has one, and whether its name is
+/// machine-wide (a Windows pipe, the Linux abstract namespace): anyone can
+/// take such a name first, so each end checks who the other runs as.
+struct Endpoint {
+    name: Name<'static>,
+    path: Option<PathBuf>,
+    check_peer: bool,
+}
+
+fn endpoint() -> io::Result<Endpoint> {
     let user = std::env::var("USER")
         .or_else(|_| std::env::var("USERNAME"))
         .unwrap_or_else(|_| "default".into());
@@ -61,7 +93,11 @@ fn socket_name() -> io::Result<(Name<'static>, Option<PathBuf>)> {
     let private_dir = private_runtime_dir();
     let abstract_ns = cfg!(any(target_os = "linux", target_os = "android"));
     if cfg!(windows) || (private_dir.is_none() && abstract_ns) {
-        Ok((base.to_ns_name::<GenericNamespaced>()?, None))
+        Ok(Endpoint {
+            name: base.to_ns_name::<GenericNamespaced>()?,
+            path: None,
+            check_peer: true,
+        })
     } else {
         let dir = private_dir
             .or_else(dirs::cache_dir)
@@ -71,16 +107,21 @@ fn socket_name() -> io::Result<(Name<'static>, Option<PathBuf>)> {
             .clone()
             .into_os_string()
             .to_fs_name::<GenericFilePath>()?;
-        Ok((name, Some(path)))
+        Ok(Endpoint {
+            name,
+            path: Some(path),
+            check_peer: false,
+        })
     }
 }
 
 /// A directory only this user can enter: `$XDG_RUNTIME_DIR` (mode 0700 by
 /// the spec) where there is one; on macOS the per-user temporary directory
 /// launchd hands out in `$TMPDIR` (`/var/folders/…/T`, mode 0700), never
-/// the shared `/tmp`.
+/// the shared `/tmp`. Both come from the environment, so they are checked:
+/// owned by this user, no access for anyone else.
 fn private_runtime_dir() -> Option<PathBuf> {
-    if let Some(dir) = dirs::runtime_dir().filter(|d| d.is_dir()) {
+    if let Some(dir) = dirs::runtime_dir().filter(|d| is_private(d)) {
         return Some(dir);
     }
     if cfg!(target_os = "macos") {
@@ -88,18 +129,120 @@ fn private_runtime_dir() -> Option<PathBuf> {
         let shared = ["/tmp", "/private/tmp"]
             .iter()
             .any(|shared| dir.starts_with(shared));
-        if !shared && dir.is_dir() {
+        if !shared && is_private(&dir) {
             return Some(dir);
         }
     }
     None
 }
 
+#[cfg(unix)]
+fn is_private(dir: &std::path::Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata(dir).is_ok_and(|m| {
+        // SAFETY: geteuid has no preconditions and cannot fail.
+        m.is_dir() && m.uid() == unsafe { libc::geteuid() } && m.mode() & 0o077 == 0
+    })
+}
+
+#[cfg(not(unix))]
+fn is_private(dir: &std::path::Path) -> bool {
+    dir.is_dir()
+}
+
+/// Whether the process at the other end of `conn` runs as this user.
+#[cfg(unix)]
+fn same_user(conn: &Stream) -> bool {
+    // SAFETY: geteuid has no preconditions and cannot fail.
+    let me = unsafe { libc::geteuid() };
+    conn.peer_creds()
+        .ok()
+        .and_then(|c| c.euid())
+        .is_some_and(|uid| uid == me)
+}
+
+#[cfg(windows)]
+fn same_user(conn: &Stream) -> bool {
+    conn.peer_creds()
+        .ok()
+        .and_then(|c| c.pid())
+        .is_some_and(crate::platform::same_user_process)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn same_user(_conn: &Stream) -> bool {
+    true
+}
+
 /// Hands `paths` to a running instance. `Ok(true)` when one took them,
-/// `Ok(false)` when nobody is listening.
+/// `Ok(false)` when nobody is listening or the one listening turned them
+/// down. `InvalidInput` when a path cannot be carried (not UTF-8, or with
+/// a line break in it), `TimedOut` when the instance did not answer.
 pub fn send(mode: Mode, paths: &[PathBuf]) -> io::Result<bool> {
-    let (name, _) = socket_name()?;
-    let mut conn = match Stream::connect(name) {
+    let body = encode(mode, paths)?;
+    let point = endpoint()?;
+    let (tx, rx) = crossbeam_channel::bounded(1);
+    // Set when this call gives up: an exchange still stuck in its connect
+    // (a busy pipe) then sends nothing once it gets through, or the files
+    // would land in the running player as well as in the window this
+    // launch opens instead.
+    let abandoned = Arc::new(AtomicBool::new(false));
+    let worker_abandoned = abandoned.clone();
+    std::thread::Builder::new()
+        .name("quickplay-ipc-send".into())
+        .spawn(move || {
+            let _ = tx.send(exchange(point, &body, &worker_abandoned));
+        })?;
+    match rx.recv_timeout(CLIENT_TIMEOUT) {
+        Ok(result) => result,
+        Err(_) => {
+            abandoned.store(true, Ordering::Release);
+            Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "the running instance did not answer",
+            ))
+        }
+    }
+}
+
+fn encode(mode: Mode, paths: &[PathBuf]) -> io::Result<String> {
+    if paths.len() > MAX_PATHS {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("more than {MAX_PATHS} files"),
+        ));
+    }
+    let mut body = String::new();
+    body.push_str(mode.as_str());
+    body.push('\n');
+    for p in paths {
+        let abs = std::path::absolute(p).unwrap_or_else(|_| p.clone());
+        // One path per line, as UTF-8: a path that cannot be written that
+        // way is not changed into another one, the hand-off is refused.
+        let line = abs
+            .to_str()
+            .filter(|s| !s.contains(['\n', '\r']))
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("{} cannot be handed over", abs.display()),
+                )
+            })?;
+        body.push_str(line);
+        body.push('\n');
+    }
+    body.push('\n');
+    if body.len() as u64 > MAX_MESSAGE_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "too many files to hand over",
+        ));
+    }
+    Ok(body)
+}
+
+fn exchange(point: Endpoint, body: &str, abandoned: &AtomicBool) -> io::Result<bool> {
+    let mut conn = match Stream::connect(point.name) {
         Ok(c) => c,
         Err(e)
             if matches!(
@@ -111,15 +254,19 @@ pub fn send(mode: Mode, paths: &[PathBuf]) -> io::Result<bool> {
         }
         Err(e) => return Err(e),
     };
-    let mut body = String::new();
-    body.push_str(mode.as_str());
-    body.push('\n');
-    for p in paths {
-        let abs = std::path::absolute(p).unwrap_or_else(|_| p.clone());
-        body.push_str(&abs.to_string_lossy());
-        body.push('\n');
+    if point.check_peer && !same_user(&conn) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "the socket is held by another user",
+        ));
     }
-    body.push('\n');
+    if abandoned.load(Ordering::Acquire) {
+        return Err(io::Error::new(io::ErrorKind::TimedOut, "given up"));
+    }
+    // Where the transport has timeouts (Unix sockets), the worker ends
+    // with the wait instead of outliving it.
+    let _ = conn.set_send_timeout(Some(CLIENT_TIMEOUT));
+    let _ = conn.set_recv_timeout(Some(CLIENT_TIMEOUT));
     conn.write_all(body.as_bytes())?;
     conn.flush()?;
     let mut reply = Vec::new();
@@ -140,27 +287,32 @@ pub struct Server {
 impl Server {
     /// Starts listening; `AddrInUse` means another instance won the race.
     pub fn start() -> io::Result<Self> {
-        let (name, socket_path) = socket_name()?;
-        let listener = match ListenerOptions::new().name(name.clone()).create_sync() {
+        let point = endpoint()?;
+        let socket_path = point.path.clone();
+        let listener = match ListenerOptions::new()
+            .name(point.name.clone())
+            .create_sync()
+        {
             Err(e) if e.kind() == io::ErrorKind::AddrInUse && socket_path.is_some() => {
                 // Either a file left by a crashed instance, or an instance
                 // that came up between our connect attempt and now. Only a
                 // socket nobody answers is stale; a live one is handed to.
-                if Stream::connect(name.clone()).is_ok() {
+                if Stream::connect(point.name.clone()).is_ok() {
                     return Err(e);
                 }
                 let path = socket_path.as_deref().expect("checked");
                 std::fs::remove_file(path)?;
-                ListenerOptions::new().name(name).create_sync()?
+                ListenerOptions::new().name(point.name).create_sync()?
             }
             other => other?,
         };
-        let (tx, rx) = crossbeam_channel::unbounded();
+        let (tx, rx) = crossbeam_channel::bounded(MAX_QUEUED);
         let ctx: CtxSlot = Arc::default();
         let thread_ctx = ctx.clone();
+        let check_peer = point.check_peer;
         std::thread::Builder::new()
             .name("quickplay-ipc".into())
-            .spawn(move || serve(listener, tx, thread_ctx))?;
+            .spawn(move || serve(listener, tx, thread_ctx, check_peer))?;
         tracing::debug!("single-instance socket ready");
         Ok(Self {
             rx,
@@ -191,7 +343,13 @@ impl Drop for Server {
     }
 }
 
-fn serve(listener: interprocess::local_socket::Listener, tx: Sender<Message>, ctx: CtxSlot) {
+fn serve(
+    listener: interprocess::local_socket::Listener,
+    tx: Sender<Message>,
+    ctx: CtxSlot,
+    check_peer: bool,
+) {
+    let active = Arc::new(AtomicUsize::new(0));
     for conn in listener.incoming() {
         let conn = match conn {
             Ok(c) => c,
@@ -200,20 +358,112 @@ fn serve(listener: interprocess::local_socket::Listener, tx: Sender<Message>, ct
                 continue;
             }
         };
-        let mut reader = BufReader::new(conn);
-        let Some(message) = read_message(&mut reader) else {
+        if check_peer && !same_user(&conn) {
+            tracing::warn!("ipc: connection from another user refused");
             continue;
-        };
-        tracing::info!(mode = ?message.mode, paths = message.paths.len(), "ipc: files received");
-        if tx.send(message).is_err() {
+        }
+        if active.load(Ordering::Acquire) >= MAX_CLIENTS {
+            tracing::warn!("ipc: too many connections at once, one refused");
+            continue;
+        }
+        active.fetch_add(1, Ordering::AcqRel);
+        let (tx, ctx, done) = (tx.clone(), ctx.clone(), active.clone());
+        let spawned = std::thread::Builder::new()
+            .name("quickplay-ipc-client".into())
+            .spawn(move || {
+                handle(conn, &tx, &ctx);
+                done.fetch_sub(1, Ordering::AcqRel);
+            });
+        if let Err(e) = spawned {
+            active.fetch_sub(1, Ordering::AcqRel);
+            tracing::warn!(error = %e, "ipc: no thread for a connection");
+        }
+    }
+}
+
+fn handle(conn: Stream, tx: &Sender<Message>, ctx: &CtxSlot) {
+    // One deadline for the whole message: named pipes have no read
+    // timeout, and a per-read timeout on a Unix socket lets a client that
+    // sends a byte now and then hold its slot forever. Unix sockets are
+    // read nonblocking; a pipe read nonblocking reports "no data yet" as
+    // the end of the stream, so it is polled instead (see `Deadline`).
+    #[cfg(not(windows))]
+    if let Err(e) = conn.set_nonblocking(true) {
+        tracing::warn!(error = %e, "ipc: connection cannot be read with a deadline");
+        return;
+    }
+    let mut reader = BufReader::new(Deadline {
+        inner: conn,
+        until: Instant::now() + MESSAGE_DEADLINE,
+    });
+    let Some(message) = read_message(&mut reader) else {
+        return;
+    };
+    tracing::info!(mode = ?message.mode, paths = message.paths.len(), "ipc: files received");
+    match tx.try_send(message) {
+        Ok(()) => {}
+        Err(TrySendError::Full(_)) => {
+            tracing::warn!("ipc: the player is not taking messages, one refused");
             return;
         }
-        if let Ok(slot) = ctx.lock() {
-            if let Some(ctx) = slot.as_ref() {
-                ctx.request_repaint();
+        Err(TrySendError::Disconnected(_)) => return,
+    }
+    if let Ok(slot) = ctx.lock() {
+        if let Some(ctx) = slot.as_ref() {
+            ctx.request_repaint();
+        }
+    }
+    let conn = &mut reader.get_mut().inner;
+    #[cfg(not(windows))]
+    let _ = conn.set_nonblocking(false);
+    let _ = conn.write_all(b"ok\n");
+}
+
+/// Reads a connection until `until`; past it the read fails, which ends
+/// the message and frees the connection's slot. A Unix socket is read
+/// nonblocking, and a read that would block waits a little and tries
+/// again; a pipe stays blocking and is only read once it holds data.
+struct Deadline {
+    inner: Stream,
+    until: Instant,
+}
+
+impl Deadline {
+    fn wait(&self) -> io::Result<()> {
+        if Instant::now() >= self.until {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "message not finished in time",
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(10));
+        Ok(())
+    }
+}
+
+impl Read for Deadline {
+    #[cfg(windows)]
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        use std::os::windows::io::{AsHandle, AsRawHandle};
+        let Stream::NamedPipe(pipe) = &self.inner;
+        // Nothing waiting yet: wait. A peek that fails (the client went
+        // away) falls through to the read, which reports it.
+        while crate::platform::pipe_bytes_available(pipe.as_handle().as_raw_handle())
+            .is_ok_and(|n| n == 0)
+        {
+            self.wait()?;
+        }
+        self.inner.read(buf)
+    }
+
+    #[cfg(not(windows))]
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        loop {
+            match self.inner.read(buf) {
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => self.wait()?,
+                other => return other,
             }
         }
-        let _ = reader.get_mut().write_all(b"ok\n");
     }
 }
 
@@ -221,6 +471,10 @@ fn serve(listener: interprocess::local_socket::Listener, tx: Sender<Message>, ct
 const MAX_MESSAGE_BYTES: u64 = 4 << 20;
 const MAX_PATHS: usize = 10_000;
 
+/// One whole message, or `None`: a read error, a message cut short (no
+/// empty line, or a last line without its line break, as when the size
+/// limit cuts it), too many paths. A bare mode line followed by the end of
+/// the stream is a focus request.
 fn read_message<R: BufRead>(reader: &mut R) -> Option<Message> {
     let mut reader = reader.take(MAX_MESSAGE_BYTES);
     let mut line = String::new();
@@ -238,10 +492,30 @@ fn read_message<R: BufRead>(reader: &mut R) -> Option<Message> {
     let mut paths = Vec::new();
     loop {
         line.clear();
-        let n = reader.read_line(&mut line).unwrap_or(0);
-        let path = line.trim_end_matches(['\r', '\n']);
-        if n == 0 || path.is_empty() || paths.len() >= MAX_PATHS {
+        let n = match reader.read_line(&mut line) {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::warn!(error = %e, "ipc: message unreadable");
+                return None;
+            }
+        };
+        if n == 0 {
+            if paths.is_empty() {
+                break;
+            }
+            tracing::warn!("ipc: message cut short");
+            return None;
+        }
+        let Some(path) = line.strip_suffix('\n') else {
+            tracing::warn!("ipc: message cut short");
+            return None;
+        };
+        if path.is_empty() {
             break;
+        }
+        if paths.len() >= MAX_PATHS {
+            tracing::warn!(max = MAX_PATHS, "ipc: too many paths");
+            return None;
         }
         paths.push(PathBuf::from(path));
     }
@@ -268,5 +542,27 @@ mod tests {
         assert!(read_message(&mut Cursor::new("")).is_none());
         let m = read_message(&mut Cursor::new("play\n")).unwrap();
         assert!(m.paths.is_empty(), "a bare play is a focus request");
+    }
+
+    #[test]
+    fn a_message_cut_short_is_refused() {
+        assert!(read_message(&mut Cursor::new("play\n/a.flac\n")).is_none());
+        assert!(read_message(&mut Cursor::new("play\n/a.flac\n/b.fl")).is_none());
+        let many = format!("play\n{}\n", "/a.flac\n".repeat(MAX_PATHS + 1));
+        assert!(read_message(&mut Cursor::new(many)).is_none());
+    }
+
+    #[test]
+    fn a_message_round_trips_and_odd_paths_are_refused() {
+        let paths = [PathBuf::from("/music/a b.flac"), PathBuf::from("/x/y.mp3")];
+        let body = encode(Mode::Play, &paths).unwrap();
+        let m = read_message(&mut Cursor::new(body)).unwrap();
+        assert_eq!(m.mode, Mode::Play);
+        assert_eq!(m.paths.len(), 2);
+        assert!(m.paths[0].ends_with("a b.flac"));
+        let err = encode(Mode::Play, &[PathBuf::from("/a\nb.flac")]).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        let err = encode(Mode::Play, &[PathBuf::from("/a.flac\r")]).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
     }
 }

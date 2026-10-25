@@ -173,9 +173,21 @@ impl Version {
         } else {
             rest.split(['.', '-'])
                 .filter(|p| !p.is_empty())
-                .map(|p| match p.parse() {
-                    Ok(n) => Identifier::Number(n),
-                    Err(_) => Identifier::Word(p.to_ascii_lowercase()),
+                .flat_map(|p| {
+                    // A label run into its number (`beta1`, `rc10`, the
+                    // compact AUR spelling) is the label then the number,
+                    // so `beta0` stays before `beta.1` and `rc10` after
+                    // `rc2`.
+                    let digits = p.len() - p.trim_end_matches(|c: char| c.is_ascii_digit()).len();
+                    let (word, number) = p.split_at(p.len() - digits);
+                    let compact = !word.is_empty()
+                        && digits > 0
+                        && word.bytes().all(|b| b.is_ascii_alphabetic());
+                    let parts = if compact { vec![word, number] } else { vec![p] };
+                    parts.into_iter().map(|part| match part.parse() {
+                        Ok(n) => Identifier::Number(n),
+                        Err(_) => Identifier::Word(part.to_ascii_lowercase()),
+                    })
                 })
                 .collect()
         };
@@ -425,6 +437,7 @@ mod platform {
 
 #[cfg(all(unix, not(target_os = "macos")))]
 mod platform {
+    use std::path::Path;
     use std::process::{Command, Stdio};
 
     use super::Install;
@@ -433,8 +446,9 @@ mod platform {
     /// put it. A Flatpak install exports `app.waveflow.WaveFlow` instead,
     /// so it is not found, which is what we want: it cannot read the
     /// handoff file. A binary on `PATH` carries no readable version, so it
-    /// comes from the package manager that installed it; a binary none of
-    /// them knows (an AppImage put there by hand) has none.
+    /// comes from the package manager that installed *that binary*; one no
+    /// package owns (an AppImage or an old build put earlier on `PATH` by
+    /// hand) has none, even when a package is installed elsewhere.
     pub fn locate() -> Option<Install> {
         use std::os::unix::fs::PermissionsExt;
         let path = std::env::var_os("PATH")?;
@@ -444,25 +458,52 @@ mod platform {
                 std::fs::metadata(exe)
                     .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
             })?;
-        Some(Install {
-            exe,
-            version: package_version(),
-        })
+        let version = package_version(&exe);
+        Some(Install { exe, version })
     }
 
-    fn package_version() -> Option<String> {
+    fn package_version(exe: &Path) -> Option<String> {
+        // The path as found and the file it resolves to: `/bin` is a link
+        // to `/usr/bin` on merged-/usr systems, and a package may install
+        // the binary elsewhere with a link on PATH.
+        let mut paths = vec![exe.to_path_buf()];
+        if let Ok(real) = exe.canonicalize() {
+            if real != exe {
+                paths.push(real);
+            }
+        }
+        let owned_by = |program: &str, args: &[&str], package: &str| {
+            paths.iter().any(|p| {
+                let Some(p) = p.to_str() else {
+                    return false;
+                };
+                let mut all = args.to_vec();
+                all.push(p);
+                // dpkg answers `wave-flow: /usr/bin/waveflow` (with an
+                // `:arch` on multi-arch), rpm and pacman the bare name.
+                run(program, &all).is_some_and(|out| {
+                    out.lines()
+                        .any(|line| line.split(':').next().map(str::trim) == Some(package))
+                })
+            })
+        };
         // Debian and apt: the package is `wave-flow`. A Debian revision
         // (`2.0.0-1`) would otherwise read as a pre-release.
-        run("dpkg-query", &["-W", "-f=${Version}", "wave-flow"])
-            .map(|v| super::strip_package_release(&v).to_string())
-            // Fedora and COPR: `%{VERSION}` carries no release.
-            .or_else(|| run("rpm", &["-q", "--qf", "%{VERSION}", "waveflow"]))
-            // AUR: `waveflow-bin 2.0.0-1`, the version then the package
-            // release.
-            .or_else(|| {
-                let line = run("pacman", &["-Q", "waveflow-bin"])?;
-                Some(super::strip_package_release(line.split_whitespace().nth(1)?).to_string())
-            })
+        if owned_by("dpkg-query", &["-S"], "wave-flow") {
+            return run("dpkg-query", &["-W", "-f=${Version}", "wave-flow"])
+                .map(|v| super::strip_package_release(&v).to_string());
+        }
+        // Fedora and COPR: `%{VERSION}` carries no release.
+        if owned_by("rpm", &["-qf", "--qf", "%{NAME}\n"], "waveflow") {
+            return run("rpm", &["-q", "--qf", "%{VERSION}", "waveflow"]);
+        }
+        // AUR: `waveflow-bin 2.0.0-1`, the version then the package
+        // release.
+        if owned_by("pacman", &["-Qqo"], "waveflow-bin") {
+            let line = run("pacman", &["-Q", "waveflow-bin"])?;
+            return Some(super::strip_package_release(line.split_whitespace().nth(1)?).to_string());
+        }
+        None
     }
 
     /// The trimmed output of a command that succeeded with some.
@@ -483,9 +524,15 @@ mod platform {
 /// the last dash. A revision starts with a digit (`1`, `1+b1`,
 /// `0ubuntu1`), a pre-release label with a letter (`beta.1`), so
 /// `2.0.0-beta.1` is left whole and `2.0.0-alpha.1` does not become a
-/// release.
+/// release. A Debian epoch (`1:2.0.0-1`) comes off the front.
 #[cfg_attr(not(all(unix, not(target_os = "macos"))), allow(dead_code))]
 fn strip_package_release(version: &str) -> &str {
+    let version = match version.split_once(':') {
+        Some((epoch, rest)) if !epoch.is_empty() && epoch.bytes().all(|b| b.is_ascii_digit()) => {
+            rest
+        }
+        _ => version,
+    };
     match version.rsplit_once('-') {
         Some((head, release)) if release.starts_with(|c: char| c.is_ascii_digit()) => head,
         _ => version,
@@ -523,6 +570,16 @@ mod tests {
         assert!(takes_handoff("2.0.0~beta.1"));
         assert!(!takes_handoff("2.0.0~alpha.1"));
         assert!(takes_handoff("2.0.0beta.1"));
+        // The compact spelling, label and number run together.
+        assert!(!takes_handoff("2.0.0beta0"));
+        assert!(!takes_handoff("2.0.0-beta0"));
+        assert!(takes_handoff("2.0.0beta1"));
+        assert!(takes_handoff("2.0.0beta10"));
+        assert!(Version::parse("2.0.0rc10") > Version::parse("2.0.0rc2"));
+        // A Debian epoch.
+        assert_eq!(strip_package_release("1:2.0.0-1"), "2.0.0");
+        assert!(takes_handoff(strip_package_release("1:2.0.0-1")));
+        assert!(!takes_handoff(strip_package_release("1:1.9.7-1")));
         assert!(takes_handoff("v2.0.0"));
         assert!(takes_handoff("2.0.0-beta.1+build.5"));
         assert_eq!(strip_package_release("2.0.0-1"), "2.0.0");

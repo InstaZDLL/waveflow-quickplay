@@ -46,6 +46,10 @@ eframe = { version = "0.36", default-features = false, features = [
     "x11",
 ] }
 egui = "0.36"
+# The font parser egui itself uses (same version, so one build): a system
+# fallback font is checked with it before egui is given the file, since
+# egui panics on one it cannot read.
+skrifa = { version = "0.44", default-features = false, features = ["std"] }
 
 # ── Audio transport (the same crates and versions the desktop engine uses) ─
 # Decoding, channel conversion and resampling come from `waveflow-core`
@@ -91,8 +95,10 @@ sys-locale = "0.3"
 
 [target.'cfg(windows)'.dependencies]
 # Owner relationship between the playlist window and the player (one taskbar
-# button, minimized together), the registry, and the version resource of an
-# installed WaveFlow; same version winit already pulls.
+# button, minimized together), the registry, the version resource of an
+# installed WaveFlow, who runs the other end of the single-instance pipe and
+# whether it holds data yet;
+# same version winit already pulls.
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_System_Threading",
@@ -101,7 +107,14 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Console",
     "Win32_System_Registry",
     "Win32_Storage_FileSystem",
+    "Win32_Security",
+    "Win32_System_Pipes",
 ] }
+
+[target.'cfg(unix)'.dependencies]
+# `geteuid`: the single-instance socket checks who is at the other end on
+# the Linux abstract namespace, and who owns the directory it lives in.
+libc = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Files opened from Finder arrive as `application:openURLs:` on the
@@ -142,6 +155,9 @@ panic = "unwind"
 # on Linux. The NSIS installer is per user, no administrator rights, and runs
 # `--register` / `--unregister` (packaging/installer.nsi); the Linux packages
 # carry the desktop entry with the audio MIME types (packaging/quickplay.desktop).
+# It packages the binary already built: run `cargo build --release --locked`
+# first. No build hook here, so the release workflow compiles everything
+# before the signing certificate is imported and nothing compiles after.
 [package.metadata.packager]
 product-name = "WaveFlow QuickPlay"
 identifier = "app.waveflow.quickplay"
@@ -149,7 +165,6 @@ publisher = "InstaZDLL"
 category = "Music"
 icons = ["assets/icon.ico", "assets/icon-128.png"]
 out-dir = "target/packager"
-before-packaging-command = "cargo build --release"
 binaries = [{ path = "waveflow-quickplay", main = true }]
 license-file = "LICENSE"
 resources = [{ src = "LICENSE", target = "LICENSE.txt" }]
@@ -164,5 +179,5 @@ display-language-selector = false
 [package.metadata.packager.deb]
 package-name = "waveflow-quickplay"
 desktop-template = "packaging/quickplay.desktop"
-depends = ["libasound2 | libasound2t64", "libxkbcommon0", "libwayland-client0", "libgl1"]
+depends = ["libgcc-s1", "libasound2 | libasound2t64", "libxkbcommon0", "libwayland-client0", "libegl1", "libgl1", "libx11-6", "libx11-xcb1", "libxcursor1", "libxi6", "libxkbcommon-x11-0"]
 section = "sound"

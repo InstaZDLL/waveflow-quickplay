@@ -37,9 +37,13 @@ const MIN_HZ: f32 = 30.0;
 const MAX_HZ: f32 = 16_000.0;
 /// Audio between two emitted frames (~30 Hz).
 const EMIT_INTERVAL: Duration = Duration::from_millis(33);
-/// Frames kept waiting for their play position; a second of audio at
-/// 30 Hz is 30 frames, and a seek clears the queue anyway.
-const MAX_QUEUED_FRAMES: usize = 64;
+/// Frames kept waiting for their play position. The decoder runs up to a
+/// ring ahead of the output, and the ring is a fixed count of interleaved
+/// samples: a second of stereo at 48 kHz, but 12 s of mono at 8 kHz, which
+/// is 360 frames at 30 Hz. Dropping the oldest frames because the queue
+/// is too short would drop the ones due soonest and freeze the bars; a
+/// seek clears the queue anyway.
+const MAX_QUEUED_FRAMES: usize = 512;
 
 /// One analysed window, due when the output clock reaches `due_samples`
 /// (interleaved samples, the unit of `SharedPlayback::samples_played`).
@@ -94,8 +98,12 @@ pub struct SpectrumAnalyzer {
     bands: [f32; BAND_COUNT],
     raw: [f32; BAND_COUNT],
     level: f32,
-    /// Audio slid through the window since the last emitted frame.
+    /// Audio slid through the window since the last emitted frame, less
+    /// the emission interval's carry: when the next frame is due.
     since_emit: usize,
+    /// Audio slid through the window since the last analysed frame: the
+    /// time the level follower moves by.
+    since_frame: usize,
 }
 
 impl SpectrumAnalyzer {
@@ -115,6 +123,7 @@ impl SpectrumAnalyzer {
             raw: [0.0; BAND_COUNT],
             level: MIN_LEVEL,
             since_emit: usize::MAX,
+            since_frame: 0,
         }
     }
 
@@ -150,9 +159,10 @@ impl SpectrumAnalyzer {
         while self.pending.len() >= FFT_SIZE {
             if self.since_emit >= interval {
                 let first = self.since_emit == usize::MAX;
-                let audio = if first { interval } else { self.since_emit };
+                let audio = if first { interval } else { self.since_frame };
                 let elapsed = Duration::from_secs_f32((audio as f32 / rate).min(1.0));
                 self.run_one_frame(rate, elapsed);
+                self.since_frame = 0;
                 // The window's middle sits this many mono frames before
                 // the newest sample fed.
                 let behind = (self.pending.len() as u64).saturating_sub(FFT_SIZE as u64 / 2);
@@ -170,6 +180,7 @@ impl SpectrumAnalyzer {
             let slid = HOP.min(self.pending.len());
             self.pending.drain(..slid);
             self.since_emit = self.since_emit.saturating_add(slid);
+            self.since_frame = self.since_frame.saturating_add(slid);
         }
     }
 
@@ -316,6 +327,20 @@ mod tests {
             .expect("band");
         // 1 kHz on a 30 Hz → 16 kHz log ladder of 32 bands is band ~17.
         assert!((15..=19).contains(&peak), "peak band {peak}");
+    }
+
+    #[test]
+    fn a_full_ring_of_low_rate_mono_keeps_the_frames_due_first() {
+        // 96 000 samples of 8 kHz mono: 12 s ahead, 360 frames at 30 Hz.
+        let mut q = SpectrumQueue::default();
+        for i in 0..360u64 {
+            q.push(SpectrumFrame {
+                due_samples: i * 266,
+                bands: [i as f32; BAND_COUNT],
+            });
+        }
+        assert_eq!(q.take_due(0).map(|b| b[0]), Some(0.0));
+        assert_eq!(q.take_due(266).map(|b| b[0]), Some(1.0));
     }
 
     #[test]

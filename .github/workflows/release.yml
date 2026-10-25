@@ -32,17 +32,38 @@ permissions:
 
 env:
   RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+  # The packaging tools, pinned: packaging/installer.nsi is a copy of
+  # cargo-packager 0.11.8's template and is refreshed when this moves.
+  CARGO_PACKAGER_VERSION: "0.11.8"
+  CARGO_GENERATE_RPM_VERSION: "0.21.1"
+
+# One run per tag at a time: a tag push and a manual rebuild of the same tag
+# would otherwise replace each other's files and checksums on the release.
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
 
 jobs:
   version:
     name: Tag matches Cargo.toml
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    outputs:
+      sha: ${{ steps.tag.outputs.sha }}
     steps:
+      # The input must name a tag, not a branch that happens to be called
+      # v<version>; every job then checks out the commit it points to now,
+      # so a tag moved during the run cannot mix two sources.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ env.RELEASE_TAG }}
+          ref: refs/tags/${{ env.RELEASE_TAG }}
           persist-credentials: false
+      - id: tag
+        run: |
+          sha=$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")
+          test "$sha" = "$(git rev-parse HEAD)"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "$RELEASE_TAG is $sha"
       - run: |
           version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
           if [ "v$version" != "$RELEASE_TAG" ]; then
@@ -60,15 +81,16 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ env.RELEASE_TAG }}
+          ref: ${{ needs.version.outputs.sha }}
           persist-credentials: false
       - run: rustup show active-toolchain
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: cargo test --locked
-      - run: cargo install cargo-packager --locked
+      # pwsh, the Windows runners' shell: environment variables are $env:.
+      - run: cargo install cargo-packager --version "$env:CARGO_PACKAGER_VERSION" --locked
       # Everything is compiled before the certificate enters the runner, so
       # no build script of any dependency runs while the key is importable;
-      # cargo-packager then finds the build up to date.
+      # cargo-packager has no build hook (Cargo.toml) and packages this.
       - run: cargo build --release --locked
 
       # Authenticode, with WaveFlow's certificate (the same two secrets as
@@ -91,14 +113,19 @@ jobs:
           }
           Write-Host "::add-mask::$env:PFX_PASSWORD"
           $pfx = Join-Path $env:RUNNER_TEMP "signing.pfx"
-          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:PFX_BASE64))
-          $password = ConvertTo-SecureString $env:PFX_PASSWORD -AsPlainText -Force
-          $cert = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $password
-          Remove-Item $pfx
-          if (-not $cert.HasPrivateKey) { Write-Error "the PFX has no private key"; exit 1 }
+          try {
+            [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:PFX_BASE64))
+            $password = ConvertTo-SecureString $env:PFX_PASSWORD -AsPlainText -Force
+            $cert = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $password
+          } finally {
+            Remove-Item $pfx -ErrorAction SilentlyContinue
+          }
           $thumbprint = $cert.Thumbprint
-          Write-Host "Signing with $($cert.Subject) ($thumbprint), valid until $($cert.NotAfter)"
+          # Recorded before any other check, so the cleanup step removes the
+          # certificate from the store whichever way this step fails.
           "SIGNING_THUMBPRINT=$thumbprint" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          if (-not $cert.HasPrivateKey) { Write-Error "the PFX has no private key"; exit 1 }
+          Write-Host "Signing with $($cert.Subject) ($thumbprint), valid until $($cert.NotAfter)"
           # The thumbprint is public; the private key stays in the store.
           @"
 
@@ -117,8 +144,27 @@ jobs:
           $files = @(Get-ChildItem target/packager/*.exe) + @(Get-Item target/release/waveflow-quickplay.exe)
           foreach ($file in $files) {
             $sig = Get-AuthenticodeSignature $file.FullName
-            # A self-signed certificate reads "UnknownError" (untrusted root):
-            # what matters is that it is ours and timestamped.
+            # A self-signed certificate reads "UnknownError" (untrusted root)
+            # or "NotTrusted"; any other status, HashMismatch first, means
+            # the signature does not cover the file as it is.
+            if ($sig.Status.ToString() -notin @('Valid', 'UnknownError', 'NotTrusted')) {
+              Write-Error "$($file.Name) has a bad signature ($($sig.Status)): $($sig.StatusMessage)"
+              exit 1
+            }
+            # UnknownError covers any chain failure, so it passes only for the
+            # one this certificate has: a chain of itself alone whose only
+            # fault is an untrusted root. The chain is read, not the message,
+            # which is in the runner's language.
+            if ($sig.Status.ToString() -eq 'UnknownError') {
+              $chain = New-Object System.Security.Cryptography.X509Certificates.X509Chain
+              $chain.ChainPolicy.RevocationMode = [System.Security.Cryptography.X509Certificates.X509RevocationMode]::NoCheck
+              $null = $chain.Build($sig.SignerCertificate)
+              $faults = @($chain.ChainStatus | ForEach-Object { $_.Status.ToString() })
+              if ($chain.ChainElements.Count -ne 1 -or $faults.Count -ne 1 -or $faults[0] -ne 'UntrustedRoot') {
+                Write-Error "$($file.Name): signature chain fails for another reason ($($faults -join ', ')): $($sig.StatusMessage)"
+                exit 1
+              }
+            }
             if ($sig.SignerCertificate.Thumbprint -ne $env:SIGNING_THUMBPRINT) {
               Write-Error "$($file.Name) is not signed with the release certificate ($($sig.Status))"
               exit 1
@@ -165,7 +211,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ env.RELEASE_TAG }}
+          ref: ${{ needs.version.outputs.sha }}
           persist-credentials: false
       # The packaging definitions (desktop entries, rpm.toml) come from the
       # workflow's own ref: on a tag push that is the tag itself, on a
@@ -184,15 +230,33 @@ jobs:
       - run: rustup show active-toolchain
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: cargo test --locked
-      - run: cargo install cargo-packager cargo-generate-rpm --locked
+      - run: cargo install cargo-packager --version "$CARGO_PACKAGER_VERSION" --locked
+      - run: cargo install cargo-generate-rpm --version "$CARGO_GENERATE_RPM_VERSION" --locked
+      # The .deb depends on the glibc the binary was linked against: the
+      # newest GLIBC_ symbol version it references.
+      - name: glibc floor
+        run: |
+          cargo build --release --locked
+          glibc=$(LC_ALL=C objdump -T target/release/waveflow-quickplay | grep -o 'GLIBC_[0-9.]*' | cut -d_ -f2 | sort -uV | tail -1)
+          echo "needs glibc $glibc"
+          sed -i "s/^depends = \[/depends = [\"libc6 (>= $glibc)\", /" Cargo.toml
+          grep -m1 '^depends' Cargo.toml
       - run: cargo packager --release --formats deb,appimage
       # The .rpm comes from cargo-generate-rpm (cargo-packager has no rpm
-      # format), from the binary cargo-packager just built; its contents
+      # format), from the release binary built above; its contents
       # and dependencies are the [package.metadata.generate-rpm] section
       # kept in packaging/rpm.toml, appended to Cargo.toml here.
       - name: RPM
         run: |
           cat packaging/rpm.toml >> Cargo.toml
+          # What the binary links, with its symbol versions, the way rpm's
+          # ELF scan would declare it (automatic detection is off, see
+          # packaging/rpm.toml).
+          LC_ALL=C objdump -p target/release/waveflow-quickplay | awk '
+            $1 == "NEEDED" { print "\"" $2 "()(64bit)\" = \"*\"" }
+            /required from/ { lib = $NF; sub(/:$/, "", lib) }
+            lib && NF == 4 && $4 ~ /_/ { print "\"" lib "(" $4 ")(64bit)\" = \"*\"" }
+          ' | sort -u >> Cargo.toml
           cargo generate-rpm --payload-compress zstd
           rpm=$(ls target/generate-rpm/*.rpm)
           mv "$rpm" target/packager/
@@ -205,6 +269,7 @@ jobs:
           rpm -qpl "$rpm" | grep -qx /usr/bin/waveflow-quickplay
           rpm -qpl "$rpm" | grep -qx /usr/share/applications/app.waveflow.quickplay.desktop
           rpm -qpR "$rpm" | grep -q 'libasound.so.2'
+          rpm -qpR "$rpm" | grep -q 'libc.so.6(GLIBC_'
       - name: Checksums
         run: |
           cd target/packager
@@ -232,7 +297,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ env.RELEASE_TAG }}
+          ref: ${{ needs.version.outputs.sha }}
           persist-credentials: false
       # The bundle definition comes from the workflow's own ref, as the
       # Linux packaging does, so a manual run can attach it to an older tag.
@@ -289,7 +354,7 @@ jobs:
 
   publish:
     name: GitHub release
-    needs: [windows, linux, macos]
+    needs: [version, windows, linux, macos]
     # Runs when every job that ran succeeded; `windows` and `macos` may
     # have been skipped by `linux_only`.
     if: ${{ always() && needs.linux.result == 'success' && (needs.windows.result == 'success' || needs.windows.result == 'skipped') && (needs.macos.result == 'success' || needs.macos.result == 'skipped') }}
@@ -300,13 +365,25 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ env.RELEASE_TAG }}
+          ref: ${{ needs.version.outputs.sha }}
           persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: dist
           merge-multiple: true
       - run: ls -la dist
+      # The tag must still point where the packages were built from, or the
+      # release would pair them with another commit's tag.
+      - name: Tag unchanged
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILT_SHA: ${{ needs.version.outputs.sha }}
+        run: |
+          now=$(gh api "repos/$GITHUB_REPOSITORY/commits/refs/tags/$RELEASE_TAG" --jq .sha)
+          if [ "$now" != "$BUILT_SHA" ]; then
+            echo "::error::$RELEASE_TAG moved from $BUILT_SHA to $now during the run"
+            exit 1
+          fi
       # On an existing release the files replace their namesakes, the
       # others are kept, and the body is rewritten from the notes at the tag.
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3

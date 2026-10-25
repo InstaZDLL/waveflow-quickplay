@@ -7,10 +7,14 @@
 #
 # That lets the release workflow take the packaging definitions from its own
 # ref while building the sources of an older tag. Dependencies are soname
-# capabilities, as rpm itself would derive them: only libasound is linked;
-# wayland, xkbcommon and EGL/GL are dlopen-ed at run time, so they are named
+# capabilities. Automatic detection is off because it would miss what is
+# dlopen-ed at run time: wayland, xkbcommon, EGL/GL and, for X11 sessions,
+# libX11, libX11-xcb, libXcursor, libXi and xkbcommon-x11, so they are named
 # here the way they are provided (alsa-lib, libwayland-client, libxkbcommon,
-# libglvnd-egl, libglvnd-glx on Fedora). File triggers of desktop-file-utils
+# libglvnd-egl, libglvnd-glx, libX11, libX11-xcb, libXcursor, libXi,
+# libxkbcommon-x11 on Fedora). What the binary links (libc with its GLIBC_
+# symbol versions, libm, libgcc_s, libasound) is read from the binary by the
+# release workflow and appended below, as rpm's own ELF scan would derive it. File triggers of desktop-file-utils
 # and hicolor-icon-theme refresh the caches, so no scriptlet is needed.
 
 [package.metadata.generate-rpm]
@@ -28,8 +32,12 @@ assets = [
 ]
 
 [package.metadata.generate-rpm.requires]
-"libasound.so.2()(64bit)" = "*"
 "libwayland-client.so.0()(64bit)" = "*"
 "libxkbcommon.so.0()(64bit)" = "*"
 "libEGL.so.1()(64bit)" = "*"
 "libGL.so.1()(64bit)" = "*"
+"libX11.so.6()(64bit)" = "*"
+"libX11-xcb.so.1()(64bit)" = "*"
+"libXcursor.so.1()(64bit)" = "*"
+"libXi.so.6()(64bit)" = "*"
+"libxkbcommon-x11.so.0()(64bit)" = "*"
