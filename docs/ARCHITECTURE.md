@@ -277,7 +277,9 @@ How the copy was installed decides the rest (`Install::detect`):
   folder this user can write, is replaced on close by a shell that waits
   for the process to exit, mounts the disk image, copies the bundle beside
   the old one with `ditto` and swaps the two, the old one coming back if
-  the swap fails (its output goes to a log beside the image in the cache);
+  the swap fails (its output goes to a log beside the image in the cache).
+  The image stays in the cache until the new bundle is in place, so a
+  failed attempt is retried at the next close without a new download;
 - `APPIMAGE` names the AppImage, whose folder this user can write, when
   the executable runs from inside its mount (`APPDIR`): both variables are
   inherited by whatever an AppImage starts, a QuickPlay installed from a

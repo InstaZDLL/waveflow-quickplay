@@ -215,7 +215,8 @@ fn check(install: &Install) -> io::Result<Option<Found>> {
     let file = dir.join(name);
     clear_cache(&dir, Some(&file));
     // Already fetched by an earlier launch that closed before installing it.
-    let cached = std::fs::read(&file)
+    let cached = std::fs::File::open(&file)
+        .and_then(|f| read_at_most(f, MAX_PACKAGE, "the cached package"))
         .ok()
         .filter(|bytes| verify(PUBLIC_KEY, bytes, &package.signature, &version, name).is_ok());
     if cached.is_none() {
@@ -241,10 +242,15 @@ fn download(client: &reqwest::blocking::Client, url: &str, max: u64) -> io::Resu
         .send()
         .and_then(|r| r.error_for_status())
         .map_err(io::Error::other)?;
+    read_at_most(response, max, url)
+}
+
+/// All of `reader`, refused past `max` bytes.
+fn read_at_most(reader: impl Read, max: u64, what: &str) -> io::Result<Vec<u8>> {
     let mut bytes = Vec::new();
-    response.take(max + 1).read_to_end(&mut bytes)?;
+    reader.take(max + 1).read_to_end(&mut bytes)?;
     if bytes.len() as u64 > max {
-        return Err(invalid(format!("{url} is larger than {max} bytes")));
+        return Err(invalid(format!("{what} is larger than {max} bytes")));
     }
     Ok(bytes)
 }
@@ -318,14 +324,17 @@ pub fn install(update: Update) -> io::Result<()> {
 
 /// The bundle is in use until this process exits: a shell waits for it,
 /// then copies the new bundle out of the disk image beside the old one and
-/// swaps them, the old one coming back if the swap fails. The image leaves
-/// the cache at once, so a launch while the shell waits cannot clear it,
-/// and everything the shell makes is in folders of its own.
+/// swaps them, the old one coming back if the swap fails. The image is
+/// copied out of the cache at once, so a launch while the shell waits
+/// cannot clear it from under the shell; the cached one goes only once the
+/// new bundle is in place, so a failed attempt is retried at the next close
+/// without downloading again. Everything the shell makes is in folders of
+/// its own.
 fn replace_app(dmg: &Path, app: &Path) -> io::Result<()> {
     const SCRIPT: &str = r#"
 pid=$1 dmg=$2 app=$3
 work=$(mktemp -d "${TMPDIR:-/tmp}/quickplay-update.XXXXXX") || exit 1
-mv "$dmg" "$work/update.dmg" || { rm -rf "$work"; exit 1; }
+cp "$dmg" "$work/update.dmg" || { rm -rf "$work"; exit 1; }
 while kill -0 "$pid" 2>/dev/null; do sleep 0.2; done
 mkdir "$work/mnt"
 hdiutil attach -nobrowse -noautoopen -readonly -mountpoint "$work/mnt" "$work/update.dmg" || { rm -rf "$work"; exit 1; }
@@ -338,7 +347,7 @@ fi
 hdiutil detach -quiet "$work/mnt" && rm -rf "$work"
 [ "$copied" = 1 ] || { [ -n "$stage" ] && rm -rf "$stage"; exit 1; }
 mv "$app" "$stage/old.app" || { rm -rf "$stage"; exit 1; }
-if mv "$stage/new.app" "$app"; then rm -rf "$stage"; else mv "$stage/old.app" "$app"; exit 1; fi
+if mv "$stage/new.app" "$app"; then rm -rf "$stage" "$dmg"; else mv "$stage/old.app" "$app"; exit 1; fi
 echo "updated $app"
 "#;
     let log = dmg.with_extension("log");
@@ -479,6 +488,12 @@ trusted comment: waveflow-quickplay 1.2.3 test.bin
             ),
             None
         );
+    }
+
+    #[test]
+    fn reads_stop_at_the_limit() {
+        assert_eq!(read_at_most(&b"1234"[..], 4, "t").unwrap(), b"1234");
+        assert!(read_at_most(&b"12345"[..], 4, "t").is_err());
     }
 
     #[test]
