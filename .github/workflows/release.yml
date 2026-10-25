@@ -151,6 +151,20 @@ jobs:
               Write-Error "$($file.Name) has a bad signature ($($sig.Status)): $($sig.StatusMessage)"
               exit 1
             }
+            # UnknownError covers any chain failure, so it passes only for the
+            # one this certificate has: a chain of itself alone whose only
+            # fault is an untrusted root. The chain is read, not the message,
+            # which is in the runner's language.
+            if ($sig.Status.ToString() -eq 'UnknownError') {
+              $chain = New-Object System.Security.Cryptography.X509Certificates.X509Chain
+              $chain.ChainPolicy.RevocationMode = [System.Security.Cryptography.X509Certificates.X509RevocationMode]::NoCheck
+              $null = $chain.Build($sig.SignerCertificate)
+              $faults = @($chain.ChainStatus | ForEach-Object { $_.Status.ToString() })
+              if ($chain.ChainElements.Count -ne 1 -or $faults.Count -ne 1 -or $faults[0] -ne 'UntrustedRoot') {
+                Write-Error "$($file.Name): signature chain fails for another reason ($($faults -join ', ')): $($sig.StatusMessage)"
+                exit 1
+              }
+            }
             if ($sig.SignerCertificate.Thumbprint -ne $env:SIGNING_THUMBPRINT) {
               Write-Error "$($file.Name) is not signed with the release certificate ($($sig.Status))"
               exit 1

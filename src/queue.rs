@@ -342,13 +342,20 @@ impl Queue {
     pub fn prev_index(&self) -> Option<usize> {
         let end = self.current?;
         if self.shuffle && self.cursor_pending {
-            // The row under the cursor has not played: back is the last
-            // track that did.
-            return self.history.iter().rev().find_map(|h| {
-                self.entries
-                    .iter()
-                    .position(|e| e.id == *h && e.failed.is_none())
-            });
+            // The row under the cursor is not the one that last played:
+            // back is the last track that did, other than that row, which
+            // the history holds too when shuffle played it earlier.
+            let under = self.entries[end].id;
+            return self
+                .history
+                .iter()
+                .rev()
+                .filter(|h| **h != under)
+                .find_map(|h| {
+                    self.entries
+                        .iter()
+                        .position(|e| e.id == *h && e.failed.is_none())
+                });
         }
         if self.shuffle {
             let id = self.entries[end].id;
@@ -444,6 +451,21 @@ mod tests {
         q.set_shuffle(true);
         assert_eq!(q.next_index(), Some(0));
         assert_eq!(q.prev_index(), None);
+    }
+
+    /// The row that moved up had already played in the round: Previous
+    /// goes to the track before, not to that row itself.
+    #[test]
+    fn previous_after_removal_skips_the_row_under_the_cursor() {
+        let mut q = queue_of(3);
+        q.set_current(Some(0));
+        q.set_shuffle(true);
+        q.set_current(Some(2));
+        q.set_current(Some(1));
+        // History 0, 2, 1; removing 1 brings 2 under the cursor.
+        assert!(q.remove(1));
+        assert_eq!(q.current().map(|e| e.title()), Some("2"));
+        assert_eq!(q.prev_index(), Some(0));
     }
 
     #[test]
