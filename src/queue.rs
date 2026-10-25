@@ -269,8 +269,10 @@ impl Queue {
         match self.current {
             Some(c) if c == index => {
                 // The cursor keeps its position, on the row that moved up
-                // into it: Play and Next both play that row next. When the
-                // last row went, nothing moved up: it clamps to the new last
+                // into it: Play plays that row, and so does Next, unless
+                // shuffle already played it in this round, in which case
+                // Next draws among the rows still unplayed. When the last
+                // row went, nothing moved up: it clamps to the new last
                 // row, which Play plays again and Next goes past.
                 if self.entries.is_empty() {
                     self.current = None;

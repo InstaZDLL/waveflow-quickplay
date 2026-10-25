@@ -202,6 +202,7 @@ cargo clippy --all-targets
 cargo test
 
 cargo install cargo-packager cargo-generate-rpm
+# The packagers take the release build above; they do not build it.
 cargo packager --release --formats nsis          # Windows: per-user installer
 cargo packager --release --formats deb,appimage  # Linux
 cat packaging/rpm.toml >> Cargo.toml && cargo generate-rpm   # Linux: .rpm → target/generate-rpm/

@@ -155,6 +155,9 @@ panic = "unwind"
 # on Linux. The NSIS installer is per user, no administrator rights, and runs
 # `--register` / `--unregister` (packaging/installer.nsi); the Linux packages
 # carry the desktop entry with the audio MIME types (packaging/quickplay.desktop).
+# It packages the binary already built: run `cargo build --release --locked`
+# first. No build hook here, so the release workflow compiles everything
+# before the signing certificate is imported and nothing compiles after.
 [package.metadata.packager]
 product-name = "WaveFlow QuickPlay"
 identifier = "app.waveflow.quickplay"
@@ -162,7 +165,6 @@ publisher = "InstaZDLL"
 category = "Music"
 icons = ["assets/icon.ico", "assets/icon-128.png"]
 out-dir = "target/packager"
-before-packaging-command = "cargo build --release"
 binaries = [{ path = "waveflow-quickplay", main = true }]
 license-file = "LICENSE"
 resources = [{ src = "LICENSE", target = "LICENSE.txt" }]

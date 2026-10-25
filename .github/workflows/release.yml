@@ -90,7 +90,7 @@ jobs:
       - run: cargo install cargo-packager --version "$env:CARGO_PACKAGER_VERSION" --locked
       # Everything is compiled before the certificate enters the runner, so
       # no build script of any dependency runs while the key is importable;
-      # cargo-packager then finds the build up to date.
+      # cargo-packager has no build hook (Cargo.toml) and packages this.
       - run: cargo build --release --locked
 
       # Authenticode, with WaveFlow's certificate (the same two secrets as
@@ -229,7 +229,7 @@ jobs:
           grep -m1 '^depends' Cargo.toml
       - run: cargo packager --release --formats deb,appimage
       # The .rpm comes from cargo-generate-rpm (cargo-packager has no rpm
-      # format), from the binary cargo-packager just built; its contents
+      # format), from the release binary built above; its contents
       # and dependencies are the [package.metadata.generate-rpm] section
       # kept in packaging/rpm.toml, appended to Cargo.toml here.
       - name: RPM
