@@ -65,7 +65,7 @@ pub const STRINGS: Strings = Strings {
     about: "정보",
     about_tagline: "WaveFlow와 함께하는 작은 플레이어: 곡을 더블 클릭하면 바로 재생됩니다.",
     about_version: "버전 {v}",
-    about_license: "자유 소프트웨어, GPL-3.0 라이선스",
+    about_license: "자유 소프트웨어, GPL-3.0-only 라이선스",
     about_engine: "WaveFlow 데스크톱 엔진 waveflow-core 기반",
     about_source: "소스 코드 및 릴리스",
 
