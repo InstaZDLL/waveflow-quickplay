@@ -104,14 +104,26 @@ impl Install {
 }
 
 /// The AppImage this process runs from: its runtime names it in
-/// `APPIMAGE`.
+/// `APPIMAGE`, and mounts it at `APPDIR`.
 pub fn appimage() -> Option<PathBuf> {
     if !cfg!(target_os = "linux") {
         return None;
     }
-    std::env::var_os("APPIMAGE")
-        .map(PathBuf::from)
-        .filter(|p| p.is_file())
+    let exe = std::env::current_exe().ok()?;
+    let appdir = std::env::var_os("APPDIR").and_then(|d| std::fs::canonicalize(d).ok());
+    appimage_of(&exe, appdir.as_deref(), std::env::var_os("APPIMAGE"))
+        .filter(|image| image.is_file())
+}
+
+/// Both variables are inherited by whatever an AppImage starts, a
+/// QuickPlay installed otherwise included: only an executable inside the
+/// mount is that AppImage's.
+fn appimage_of(
+    exe: &Path,
+    appdir: Option<&Path>,
+    image: Option<std::ffi::OsString>,
+) -> Option<PathBuf> {
+    exe.starts_with(appdir?).then(|| image.map(PathBuf::from))?
 }
 
 #[cfg(unix)]
@@ -432,6 +444,41 @@ trusted comment: waveflow-quickplay 1.2.3 test.bin
     fn the_signature_names_the_version_and_the_file() {
         assert!(verify(TEST_KEY, TEST_PACKAGE, TEST_SIGNATURE, "9.0.0", "test.bin").is_err());
         assert!(verify(TEST_KEY, TEST_PACKAGE, TEST_SIGNATURE, "1.2.3", "other.bin").is_err());
+    }
+
+    #[test]
+    fn an_appimage_is_the_one_whose_mount_runs_this() {
+        let image = || Some("/home/u/Apps/waveflow-quickplay.AppImage".into());
+        let mount = Path::new("/tmp/.mount_waveflXYZ");
+        assert_eq!(
+            appimage_of(
+                Path::new("/tmp/.mount_waveflXYZ/usr/bin/waveflow-quickplay"),
+                Some(mount),
+                image()
+            ),
+            Some(PathBuf::from("/home/u/Apps/waveflow-quickplay.AppImage"))
+        );
+        // Started by another AppImage, which left its variables behind.
+        assert_eq!(
+            appimage_of(
+                Path::new("/usr/bin/waveflow-quickplay"),
+                Some(mount),
+                image()
+            ),
+            None
+        );
+        assert_eq!(
+            appimage_of(Path::new("/usr/bin/waveflow-quickplay"), None, image()),
+            None
+        );
+        assert_eq!(
+            appimage_of(
+                Path::new("/tmp/.mount_waveflXYZ/usr/bin/waveflow-quickplay"),
+                Some(mount),
+                None
+            ),
+            None
+        );
     }
 
     #[test]

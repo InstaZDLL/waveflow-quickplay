@@ -278,8 +278,11 @@ How the copy was installed decides the rest (`Install::detect`):
   for the process to exit, mounts the disk image, copies the bundle beside
   the old one with `ditto` and swaps the two, the old one coming back if
   the swap fails (its output goes to a log beside the image in the cache);
-- `APPIMAGE` names the AppImage, whose folder this user can write: the new
-  file is copied beside it and renamed over it on close;
+- `APPIMAGE` names the AppImage, whose folder this user can write, when
+  the executable runs from inside its mount (`APPDIR`): both variables are
+  inherited by whatever an AppImage starts, a QuickPlay installed from a
+  package included. The new file is copied beside it and renamed over it on
+  close;
 - anything else (a `.deb` or an `.rpm` under `/usr`, a build from source, a
   read-only copy) only shows that a new version is out, with a link to the
   release in the settings.
