@@ -52,6 +52,8 @@ pub const STRINGS: Strings = Strings {
     status_cannot_open_waveflow: "无法打开 WaveFlow：{e}",
     status_pin_needs_xwayland: "始终置顶需要 XWayland，但当前会话没有",
     status_cannot_restart: "无法重启 QuickPlay：{e}",
+    status_update_ready: "QuickPlay {v} 将在关闭时安装",
+    status_update_available: "QuickPlay {v} 现已可用",
     tip_open_in_waveflow: "在 WaveFlow 中继续播放",
 
     // ── File dialog ────────────────────────────────────────────────────
@@ -62,6 +64,7 @@ pub const STRINGS: Strings = Strings {
     settings: "设置",
     language: "语言",
     language_system: "跟随系统 ({l})",
+    settings_check_updates: "启动时检查更新",
     about: "关于",
     about_tagline: "WaveFlow 的轻巧播放器：双击曲目，即刻播放。",
     about_version: "版本 {v}",

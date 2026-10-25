@@ -113,9 +113,15 @@ pub fn relaunch_on_wayland(
     spawn_after_exit(resume, true)
 }
 
-/// This executable, started to wait for this process to exit.
+/// This executable, started to wait for this process to exit. From an
+/// AppImage, the AppImage itself: the executable inside lives on a mount
+/// that goes away with this process.
 fn after_exit_command() -> io::Result<std::process::Command> {
-    let mut command = std::process::Command::new(std::env::current_exe()?);
+    let exe = match crate::update::appimage() {
+        Some(image) => image,
+        None => std::env::current_exe()?,
+    };
+    let mut command = std::process::Command::new(exe);
     command
         .arg("--after-pid")
         .arg(std::process::id().to_string())

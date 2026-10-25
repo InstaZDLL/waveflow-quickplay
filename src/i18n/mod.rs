@@ -208,6 +208,13 @@ pub struct Strings {
     /// `{e}` is why QuickPlay could not start again under the other
     /// window system.
     pub status_cannot_restart: &'static str,
+    /// `{v}` is the version of an update downloaded at launch, installed
+    /// when QuickPlay closes.
+    pub status_update_ready: &'static str,
+    /// `{v}` is a newer version this copy cannot install by itself (a Linux
+    /// package, a build from source); also the link to its page in the
+    /// settings.
+    pub status_update_available: &'static str,
     /// The button that hands playback over to WaveFlow, shown when it is
     /// installed.
     pub tip_open_in_waveflow: &'static str,
@@ -223,6 +230,8 @@ pub struct Strings {
     /// Picker entry that follows the system; `{l}` is the language it
     /// currently resolves to, in that language's own name.
     pub language_system: &'static str,
+    /// The checkbox that turns the update check at launch on or off.
+    pub settings_check_updates: &'static str,
     pub about: &'static str,
     /// One sentence under the app name.
     pub about_tagline: &'static str,
@@ -325,6 +334,16 @@ mod tests {
                     "status_cannot_restart",
                     en.status_cannot_restart,
                     t.status_cannot_restart,
+                ),
+                (
+                    "status_update_ready",
+                    en.status_update_ready,
+                    t.status_update_ready,
+                ),
+                (
+                    "status_update_available",
+                    en.status_update_available,
+                    t.status_update_available,
                 ),
                 ("language_system", en.language_system, t.language_system),
                 ("about_version", en.about_version, t.about_version),

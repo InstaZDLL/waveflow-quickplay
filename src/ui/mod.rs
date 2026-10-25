@@ -56,6 +56,8 @@ pub enum Action {
     SetLanguage(String),
     /// Hand the queue and the position over to WaveFlow, then close.
     OpenInWaveFlow,
+    /// The update check at launch, on or off.
+    SetCheckUpdates(bool),
 }
 
 /// Read-only snapshot of what the player pane shows.

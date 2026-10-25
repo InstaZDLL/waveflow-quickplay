@@ -1,7 +1,8 @@
 //! The settings page, shown in place of the controls while it is open: the
-//! interface language, and an "about" block with the version, the licence
-//! and a link to the repository. Laid out to fit the compact bar without
-//! scrolling in English; a scroll bar appears when a language needs more.
+//! interface language, an "about" block with the version, the licence and
+//! a link to the repository, then the update check. The language and the
+//! about block are laid out to fit the compact bar without scrolling in
+//! English; the update check sits below them, where a scroll bar leads.
 
 use egui::{vec2, Align, Layout, RichText, Sense, Ui};
 
@@ -12,8 +13,17 @@ use crate::i18n::{fill, Lang, Strings};
 
 const REPOSITORY: &str = "https://github.com/InstaZDLL/waveflow-quickplay";
 
-/// `language` is the stored preference: a code, or empty for the system's.
-pub fn show(ui: &mut Ui, t: &'static Strings, language: &str, actions: &mut Vec<Action>) {
+/// What the page shows of the settings and of the update check.
+pub struct Page<'a> {
+    /// The stored preference: a code, or empty for the system's.
+    pub language: &'a str,
+    pub check_updates: bool,
+    /// A newer version this copy cannot install by itself.
+    pub update_available: Option<&'a str>,
+}
+
+pub fn show(ui: &mut Ui, t: &'static Strings, page: &Page<'_>, actions: &mut Vec<Action>) {
+    let language = page.language;
     ui.spacing_mut().item_spacing = vec2(8.0, 2.0);
 
     // ── Header: gear and title at the left; close, then the language
@@ -106,6 +116,28 @@ pub fn show(ui: &mut Ui, t: &'static Strings, language: &str, actions: &mut Vec<
                 )
                 .on_hover_text(REPOSITORY);
             });
+            if let Some(version) = page.update_available {
+                let page = format!("{}{version}", crate::update::RELEASE_PAGE);
+                ui.hyperlink_to(
+                    RichText::new(fill(t.status_update_available, &[("v", version)]))
+                        .size(11.0)
+                        .color(theme::ACCENT_HOVER),
+                    &page,
+                )
+                .on_hover_text(&page);
+            }
+
+            // ── Updates, under the about block so that block still fits
+            //    the compact bar; scrolled to there, or seen in the
+            //    artwork mode.
+            ui.add_space(6.0);
+            let mut check = page.check_updates;
+            let label = RichText::new(t.settings_check_updates)
+                .size(12.0)
+                .color(theme::TEXT_DIM);
+            if ui.checkbox(&mut check, label).changed() {
+                actions.push(Action::SetCheckUpdates(check));
+            }
         });
 }
 
