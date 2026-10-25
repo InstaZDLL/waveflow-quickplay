@@ -161,6 +161,13 @@ pub struct Strings {
     pub tip_spectrum: &'static str,
     pub tip_settings: &'static str,
     pub tip_always_on_top: &'static str,
+    /// The pin in a Wayland session, where pinning restarts QuickPlay
+    /// under XWayland (Wayland lets only the compositor keep a window on
+    /// top).
+    pub tip_always_on_top_xwayland: &'static str,
+    /// The pin once QuickPlay runs under XWayland for it: unpinning
+    /// restarts it under Wayland.
+    pub tip_always_on_top_wayland: &'static str,
     pub tip_minimize: &'static str,
     pub tip_close: &'static str,
 
@@ -196,6 +203,11 @@ pub struct Strings {
     pub status_cannot_play: &'static str,
     /// `{e}` is why WaveFlow could not be started.
     pub status_cannot_open_waveflow: &'static str,
+    /// The pin was clicked in a Wayland session that has no XWayland.
+    pub status_pin_needs_xwayland: &'static str,
+    /// `{e}` is why QuickPlay could not start again under the other
+    /// window system.
+    pub status_cannot_restart: &'static str,
     /// The button that hands playback over to WaveFlow, shown when it is
     /// installed.
     pub tip_open_in_waveflow: &'static str,
@@ -308,6 +320,11 @@ mod tests {
                     "status_cannot_open_waveflow",
                     en.status_cannot_open_waveflow,
                     t.status_cannot_open_waveflow,
+                ),
+                (
+                    "status_cannot_restart",
+                    en.status_cannot_restart,
+                    t.status_cannot_restart,
                 ),
                 ("language_system", en.language_system, t.language_system),
                 ("about_version", en.about_version, t.about_version),

@@ -215,14 +215,14 @@ pub enum TitleAction {
 
 /// A draggable title bar for an undecorated window: logo, title, an
 /// optional dim subtitle, then settings (when `settings` is `Some`, lit
-/// while the page is open), pin (when `pinned` is `Some`), minimize and
+/// while the page is open), pin (when `pin` is `Some`: lit or not, and its tooltip), minimize and
 /// close. Fills the `ui` it is given; the caller sizes it.
 pub fn title_bar(
     ui: &mut Ui,
     t: &Strings,
     title: &str,
     subtitle: Option<&str>,
-    pinned: Option<bool>,
+    pin: Option<(bool, &str)>,
     minimize: bool,
     settings: Option<bool>,
 ) -> Option<TitleAction> {
@@ -260,8 +260,8 @@ pub fn title_bar(
             if minimize && icon_button(ui, Icon::Minimize, 22.0, t.tip_minimize, false).clicked() {
                 action = Some(TitleAction::Minimize);
             }
-            if let Some(pinned) = pinned {
-                if icon_button(ui, Icon::Pin, 22.0, t.tip_always_on_top, pinned).clicked() {
+            if let Some((pinned, tip)) = pin {
+                if icon_button(ui, Icon::Pin, 22.0, tip, pinned).clicked() {
                     action = Some(TitleAction::Pin);
                 }
             }

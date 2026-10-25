@@ -23,6 +23,8 @@ pub const STRINGS: Strings = Strings {
     tip_spectrum: "Espectro (S)",
     tip_settings: "Ajustes",
     tip_always_on_top: "Siempre encima (T)",
+    tip_always_on_top_xwayland: "Siempre encima (T): reinicia QuickPlay en XWayland",
+    tip_always_on_top_wayland: "Siempre encima (T): al desactivarlo, QuickPlay se reinicia en Wayland",
     tip_minimize: "Minimizar",
     tip_close: "Cerrar",
 
@@ -48,6 +50,8 @@ pub const STRINGS: Strings = Strings {
     status_no_audio_files: "Sin archivos de audio compatibles",
     status_cannot_play: "No se puede reproducir: {e}",
     status_cannot_open_waveflow: "No se puede abrir WaveFlow: {e}",
+    status_pin_needs_xwayland: "Siempre encima necesita XWayland, que esta sesión no tiene",
+    status_cannot_restart: "No se puede reiniciar QuickPlay: {e}",
     tip_open_in_waveflow: "Continuar en WaveFlow",
 
     // ── File dialog ────────────────────────────────────────────────────

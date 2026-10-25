@@ -116,6 +116,14 @@ windows-sys = { version = "0.61", features = [
 # the Linux abstract namespace, and who owns the directory it lives in.
 libc = "0.2"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# `with_x11`: pinned in a Wayland session, QuickPlay runs under XWayland
+# (src/restart.rs); the winit version eframe already pulls.
+winit = { version = "0.30", default-features = false }
+# Whether XWayland answers before choosing it, opened as winit opens it;
+# the version winit already pulls.
+x11-dl = "2"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 # Files opened from Finder arrive as `application:openURLs:` on the
 # application delegate (src/macos.rs): the event loop is built here so the

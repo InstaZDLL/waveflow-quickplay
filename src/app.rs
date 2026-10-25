@@ -18,6 +18,7 @@ use crate::ipc;
 use crate::library::{self, Loader, LoaderEvent};
 use crate::lyrics::Lyrics;
 use crate::queue::Queue;
+use crate::restart::{self, Resume};
 use crate::ui::widgets::{self, TitleAction};
 use crate::ui::{
     player, playlist, settings as settings_page, theme, Action, PlayerView, COMPACT_HEIGHT,
@@ -117,6 +118,8 @@ pub struct QuickPlayApp {
     /// Where the pending load starts. Until its `Loaded` arrives, the
     /// engine's clock still counts the previous track.
     load_start_ms: u64,
+    /// Whether the pending load is to play or wait paused once open.
+    load_autoplay: bool,
     /// Bumped by every `clear`: a folder scan requested before it belongs to
     /// a queue that is gone, and its result is dropped when it arrives.
     scan_generation: u64,
@@ -140,6 +143,12 @@ pub struct QuickPlayApp {
     /// WaveFlow's executable, looked for in the background: the player
     /// offers to carry on there when it is installed.
     waveflow: waveflow::Finder,
+    /// Running under XWayland because the pin is on in a Wayland session
+    /// (`src/restart.rs`): unpinning restarts under Wayland.
+    xwayland: bool,
+    /// The answer of the XWayland probe a pin click started, off the UI
+    /// thread: in GNOME the first X client waits for XWayland to start.
+    pin_probe: Option<std::sync::mpsc::Receiver<bool>>,
 }
 
 impl QuickPlayApp {
@@ -148,6 +157,8 @@ impl QuickPlayApp {
         settings: Settings,
         files: Vec<PathBuf>,
         ipc: Option<ipc::Server>,
+        resume: Option<Resume>,
+        xwayland: bool,
     ) -> Self {
         theme::apply(&cc.egui_ctx);
         let ctx = cc.egui_ctx.clone();
@@ -194,6 +205,7 @@ impl QuickPlayApp {
             lyrics: None,
             loaded_generation: 0,
             load_start_ms: 0,
+            load_autoplay: false,
             scan_generation: 0,
             capture: Capture::from_env(),
             ipc,
@@ -209,10 +221,15 @@ impl QuickPlayApp {
                 let ctx = cc.egui_ctx.clone();
                 move || ctx.request_repaint()
             }),
+            xwayland,
+            pin_probe: None,
             settings,
         };
         if !files.is_empty() {
             app.add_paths(&files, true);
+        }
+        if let Some(resume) = resume {
+            app.resume(resume);
         }
         app
     }
@@ -264,10 +281,7 @@ impl QuickPlayApp {
         if self.queue.is_empty() {
             return;
         }
-        let paths = (0..self.queue.len())
-            .filter_map(|i| self.queue.get(i))
-            .map(|e| std::path::absolute(&e.path).unwrap_or_else(|_| e.path.clone()))
-            .collect();
+        let paths = self.queue_paths();
         let index = self.queue.current_index().unwrap_or(0);
         let position = self.position_ms();
         // Stopped or at the end: WaveFlow gets the track, from its start,
@@ -297,6 +311,135 @@ impl QuickPlayApp {
                 );
                 self.set_status(message);
             }
+        }
+    }
+
+    /// The queue's files, absolute, in order: what another process needs to
+    /// take the queue over.
+    fn queue_paths(&self) -> Vec<PathBuf> {
+        (0..self.queue.len())
+            .filter_map(|i| self.queue.get(i))
+            .map(|e| std::path::absolute(&e.path).unwrap_or_else(|_| e.path.clone()))
+            .collect()
+    }
+
+    /// The pin. In a Wayland session it cannot work in place: switching it
+    /// on restarts QuickPlay under XWayland, switching it off restarts it
+    /// under Wayland (`src/restart.rs`). Elsewhere it is a window level.
+    fn toggle_pin(&mut self, ctx: &egui::Context) {
+        // A click while XWayland is being asked about waits for the answer.
+        if self.pin_probe.is_some() {
+            return;
+        }
+        let pinned = !self.settings.always_on_top;
+        if pinned && restart::wayland_session() {
+            // Asked on the click only, since in GNOME the first X client
+            // starts XWayland, and on a thread of its own, since that
+            // client waits for it; the answer comes back in `logic`.
+            let (tx, rx) = std::sync::mpsc::channel();
+            let ctx = ctx.clone();
+            std::thread::spawn(move || {
+                let _ = tx.send(restart::xwayland_reachable());
+                ctx.request_repaint();
+            });
+            self.pin_probe = Some(rx);
+            return;
+        }
+        self.set_pin(ctx, pinned, false);
+    }
+
+    /// The probe of a pin click has answered: pin under XWayland, or say
+    /// why the pin cannot work.
+    fn finish_pin_probe(&mut self, ctx: &egui::Context) {
+        let Some(probe) = &self.pin_probe else {
+            return;
+        };
+        let reachable = match probe.try_recv() {
+            Ok(reachable) => reachable,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => false,
+        };
+        self.pin_probe = None;
+        if !reachable {
+            self.set_status(self.t().status_pin_needs_xwayland);
+            return;
+        }
+        self.set_pin(ctx, true, true);
+    }
+
+    /// Switch the pin, restarting when it changes the window system.
+    fn set_pin(&mut self, ctx: &egui::Context, pinned: bool, xwayland: bool) {
+        self.settings.always_on_top = pinned;
+        self.settings.save();
+        if xwayland != self.xwayland {
+            self.restart_for_pin();
+            return;
+        }
+        self.apply_window_mode(ctx, false);
+    }
+
+    /// Start again under the other window system with the same queue,
+    /// track, position and play or pause, then close. On failure the pin
+    /// goes back to what it was and the player says why.
+    fn restart_for_pin(&mut self) {
+        let (loaded, playing) = match self.state {
+            PlayerState::Playing => (true, true),
+            // A paused track being restored is loading too: it goes on as
+            // the load was asked to.
+            PlayerState::Loading => (true, self.load_autoplay),
+            PlayerState::Paused => (true, false),
+            PlayerState::Idle | PlayerState::Ended => (false, false),
+        };
+        let resume = Resume {
+            paths: self.queue_paths(),
+            index: self.queue.current_index(),
+            position_ms: if loaded { self.position_ms() } else { 0 },
+            loaded,
+            playing,
+        };
+        match restart::relaunch(&resume) {
+            Ok(()) => {
+                tracing::info!(
+                    pinned = self.settings.always_on_top,
+                    position_ms = resume.position_ms,
+                    playing,
+                    "restarting for the pin"
+                );
+                // Silent at once, and the device free for the new process.
+                if let Some(engine) = &self.engine {
+                    engine.send(AudioCmd::Stop);
+                }
+                self.ctx
+                    .send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Close);
+            }
+            Err(err) => {
+                tracing::error!(%err, "restarting for the pin failed");
+                self.settings.always_on_top = !self.settings.always_on_top;
+                self.settings.save();
+                let message = fill(self.t().status_cannot_restart, &[("e", &err.to_string())]);
+                self.set_status(message);
+            }
+        }
+    }
+
+    /// Pick up where the QuickPlay that restarted for the pin was.
+    fn resume(&mut self, resume: Resume) {
+        tracing::info!(
+            tracks = resume.paths.len(),
+            index = ?resume.index,
+            position_ms = resume.position_ms,
+            playing = resume.playing,
+            "resuming after a restart for the pin"
+        );
+        self.add_resolved(resume.paths, false, false);
+        let Some(index) = resume.index.filter(|i| *i < self.queue.len()) else {
+            return;
+        };
+        if resume.loaded {
+            self.play_index(index, resume.position_ms, resume.playing);
+        } else {
+            self.queue.set_current(Some(index));
+            self.selected = Some(index);
         }
     }
 
@@ -405,6 +548,7 @@ impl QuickPlayApp {
         self.seek_preview = None;
         self.state = PlayerState::Loading;
         self.load_start_ms = start_ms;
+        self.load_autoplay = autoplay;
         self.lyrics = Lyrics::load_for(&path);
         let generation = self.generation;
         self.send(AudioCmd::Load {
@@ -460,7 +604,10 @@ impl QuickPlayApp {
     fn toggle_play(&mut self) {
         match self.state {
             PlayerState::Playing => self.send(AudioCmd::Pause),
-            PlayerState::Paused | PlayerState::Loading => self.send(AudioCmd::Resume),
+            PlayerState::Paused | PlayerState::Loading => {
+                self.load_autoplay = true;
+                self.send(AudioCmd::Resume);
+            }
             PlayerState::Idle | PlayerState::Ended => {
                 if self.queue.current_index().is_some() {
                     self.restart_current(0);
@@ -883,11 +1030,7 @@ impl QuickPlayApp {
                 self.spectrum_target.iter_mut().for_each(|b| *b = 0.0);
                 self.settings.save();
             }
-            Action::TogglePin => {
-                self.settings.always_on_top = !self.settings.always_on_top;
-                self.apply_window_mode(&ctx, false);
-                self.settings.save();
-            }
+            Action::TogglePin => self.toggle_pin(&ctx),
             Action::OpenFiles => self.open_dialog(),
             Action::PlayIndex(i) => self.play_index(i, 0, true),
             Action::Select(s) => self.selected = s,
@@ -1285,6 +1428,7 @@ impl eframe::App for QuickPlayApp {
         self.pump_engine_events();
         self.pump_loader_events();
         self.pump_ipc_messages(ctx);
+        self.finish_pin_probe(ctx);
         self.handle_dropped_files(ctx);
         self.handle_shortcuts(ctx);
         self.track_window_size(ctx);
@@ -1323,6 +1467,14 @@ impl eframe::App for QuickPlayApp {
         let subtitle = view.has_track.then(|| view.title.to_string());
         let t = view.t;
         let settings_open = self.settings_open;
+        // In a Wayland session the pin restarts QuickPlay; its tooltip says so.
+        let pin_tip = if self.xwayland {
+            t.tip_always_on_top_wayland
+        } else if restart::wayland_session() && restart::xwayland_available() {
+            t.tip_always_on_top_xwayland
+        } else {
+            t.tip_always_on_top
+        };
         egui::Panel::top("title")
             .exact_size(TITLE_HEIGHT)
             .show_separator_line(false)
@@ -1333,7 +1485,7 @@ impl eframe::App for QuickPlayApp {
                     t,
                     BAR_TITLE,
                     subtitle.as_deref(),
-                    Some(view.always_on_top),
+                    Some((view.always_on_top, pin_tip)),
                     true,
                     Some(settings_open),
                 ) {
