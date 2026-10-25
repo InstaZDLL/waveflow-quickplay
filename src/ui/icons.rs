@@ -25,7 +25,7 @@ pub enum Icon {
     Close,
     /// A gear.
     Settings,
-    /// WaveFlow's three bars.
+    /// WaveFlow's mark: the W of its name drawn as a wave.
     Logo,
     /// Two arrows chasing each other round a circle.
     Repeat,
@@ -218,13 +218,23 @@ pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
             painter.circle_stroke(c, u(0.10), stroke);
         }
         Icon::Logo => {
-            for (x, h) in [(-0.30_f32, 0.30_f32), (0.0, 0.46), (0.30, 0.22)] {
-                painter.rect_filled(
-                    Rect::from_center_size(p(x, 0.0), vec2(u(0.16), u(2.0 * h))),
-                    1.0,
-                    color,
-                );
-            }
+            // WaveFlow's small-size symbol, in its 256 box: one and a half
+            // periods of a sine from x 35 to 221 about y 124 (4 above the
+            // middle, the optical centre), amplitude 60, stroked at 46 with
+            // round ends. Its ends sit on the inflection points, so it
+            // reads W and not M.
+            let at = |x: f32, y: f32| p((x - 128.0) / 256.0, (y - 128.0) / 256.0);
+            let points: Vec<Pos2> = (0..=48)
+                .map(|i| {
+                    let x = 35.0 + 186.0 * i as f32 / 48.0;
+                    let y = 124.0 + 60.0 * (std::f32::consts::PI * (x - 35.0) / 62.0).sin();
+                    at(x, y)
+                })
+                .collect();
+            let width = u(46.0 / 256.0);
+            painter.circle_filled(points[0], width / 2.0, color);
+            painter.circle_filled(points[points.len() - 1], width / 2.0, color);
+            painter.add(Shape::line(points, Stroke::new(width, color)));
         }
         Icon::Warning => {
             painter.add(Shape::convex_polygon(
