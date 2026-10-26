@@ -13,6 +13,7 @@
 //! ([`take_opened`]) and plays them as a `play` hand-over from a second
 //! launch: the queue is replaced.
 
+use std::ffi::CStr;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
@@ -21,7 +22,7 @@ use objc2::{ffi, sel};
 use objc2_foundation::{NSArray, NSURL};
 
 /// The class winit registers for its application delegate.
-const WINIT_DELEGATE: &str = "WinitApplicationDelegate";
+const WINIT_DELEGATE: &CStr = c"WinitApplicationDelegate";
 
 /// What Finder opened that the app has not taken yet, one entry per open:
 /// each is a request of its own and replaces the queue, even when two
@@ -45,9 +46,8 @@ unsafe extern "C" fn open_urls(
     };
     let paths: Vec<PathBuf> = urls
         .iter()
-        // SAFETY: plain NSURL getters on a live object.
-        .filter(|url| unsafe { url.isFileURL() })
-        .filter_map(|url| unsafe { url.path() })
+        .filter(|url| url.isFileURL())
+        .filter_map(|url| url.path())
         .map(|path| PathBuf::from(path.to_string()))
         .collect();
     tracing::info!(files = paths.len(), "opened from Finder");
@@ -64,7 +64,7 @@ unsafe extern "C" fn open_urls(
 /// the event loop exists (which registers the class) and before it runs.
 fn answer_open_urls() {
     let Some(class) = AnyClass::get(WINIT_DELEGATE) else {
-        tracing::warn!("{WINIT_DELEGATE} not found: files opened from Finder will not arrive");
+        tracing::warn!("{WINIT_DELEGATE:?} not found: files opened from Finder will not arrive");
         return;
     };
     type OpenUrls = unsafe extern "C" fn(*mut AnyObject, Sel, *mut AnyObject, *mut NSArray<NSURL>);
@@ -75,14 +75,14 @@ fn answer_open_urls() {
     let imp: Imp = unsafe { std::mem::transmute::<OpenUrls, Imp>(open_urls) };
     let added = unsafe {
         ffi::class_addMethod(
-            class as *const AnyClass as *mut ffi::objc_class,
-            sel!(application:openURLs:).as_ptr(),
-            Some(imp),
+            class as *const AnyClass as *mut AnyClass,
+            sel!(application:openURLs:),
+            imp,
             c"v@:@@".as_ptr(),
         )
     };
-    if added == ffi::NO {
-        tracing::warn!("{WINIT_DELEGATE} already answers application:openURLs:");
+    if !added.as_bool() {
+        tracing::warn!("{WINIT_DELEGATE:?} already answers application:openURLs:");
     }
 }
 

@@ -140,8 +140,8 @@ x11-dl = "2"
 # method can be added to winit's delegate before it starts, with the winit
 # and objc2 versions eframe already pulls.
 winit = { version = "0.30", default-features = false }
-objc2 = "0.5"
-objc2-foundation = { version = "0.2", features = [
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = [
     "NSArray",
     "NSEnumerator",
     "NSString",
