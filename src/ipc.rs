@@ -734,9 +734,12 @@ mod tests {
     #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
     #[test]
     fn a_hand_off_tried_again_is_queued_once() {
-        let base = format!("waveflow-quickplay-retry-{}.sock", std::process::id());
         #[cfg(not(target_os = "macos"))]
-        let name = || base.clone().to_ns_name::<GenericNamespaced>().unwrap();
+        let name = || {
+            format!("waveflow-quickplay-retry-{}.sock", std::process::id())
+                .to_ns_name::<GenericNamespaced>()
+                .unwrap()
+        };
         // macOS has no abstract namespace: a socket file, in a directory
         // made for this run with mode 0700. Creating it fails if anything
         // is already there, so it is never someone else's, even when the
@@ -748,12 +751,14 @@ mod tests {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos();
-            let dir = std::env::temp_dir().join(format!("{base}-{nanos}"));
+            // Short: $TMPDIR is long on macOS and a socket path must fit
+            // in 104 bytes (sun_path).
+            let dir = std::env::temp_dir().join(format!("qp-{}-{nanos}", std::process::id()));
             std::fs::DirBuilder::new().mode(0o700).create(&dir).unwrap();
             dir
         };
         #[cfg(target_os = "macos")]
-        let path = dir.join("retry.sock");
+        let path = dir.join("s");
         #[cfg(target_os = "macos")]
         let name = || {
             path.clone()
