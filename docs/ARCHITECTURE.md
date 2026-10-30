@@ -208,7 +208,9 @@ On Windows the two verbs are `DropTarget` verbs, not command lines: a
 command-line verb starts one process per selected file, a thousand for a
 thousand files. Each verb names a COM class (`CLSID\{…}\LocalServer32`,
 the executable itself, per user like the rest), and Explorer drops the
-whole selection on it as one data object, with no limit on its size. COM
+whole selection on it as one data object; Explorer sets no limit on its
+size, but the socket does: a selection over its caps (10 000 paths, 4 MiB)
+is not handed to the running player and opens a window of its own. COM
 starts QuickPlay once with `-Embedding`; `src/drop_verb.rs` serves the two
 classes (play, add to playlist) from a multithreaded apartment on a thread
 of its own, so winit still gets the main thread for OLE, reads the
