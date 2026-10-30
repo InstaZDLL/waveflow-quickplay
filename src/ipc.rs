@@ -752,8 +752,13 @@ mod tests {
                 .unwrap()
                 .as_nanos();
             // Short: $TMPDIR is long on macOS and a socket path must fit
-            // in 104 bytes (sun_path).
-            let dir = std::env::temp_dir().join(format!("qp-{}-{nanos}", std::process::id()));
+            // in 104 bytes (sun_path). One too long to leave room for the
+            // ~40 bytes below gives way to /tmp, the directory still private.
+            let mut parent = std::env::temp_dir();
+            if parent.as_os_str().len() + 40 > 104 {
+                parent = PathBuf::from("/tmp");
+            }
+            let dir = parent.join(format!("qp-{}-{nanos}", std::process::id()));
             std::fs::DirBuilder::new().mode(0o700).create(&dir).unwrap();
             dir
         };
