@@ -120,6 +120,18 @@ windows-sys = { version = "0.61", features = [
     "Win32_Security",
     "Win32_System_Pipes",
 ] }
+# Explorer's verbs as `DropTarget` verbs (src/drop_verb.rs): QuickPlay serves
+# COM classes, written with `#[implement]`. The version cpal already pulls,
+# which enables every feature named here but `Win32_System_Ole`.
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_System_Ole",
+    "Win32_System_SystemServices",
+    "Win32_UI_Shell",
+] }
+# `#[implement]` expands to paths in `windows_core`.
+windows-core = "0.62"
 
 [target.'cfg(unix)'.dependencies]
 # `geteuid`: the single-instance socket checks who is at the other end on

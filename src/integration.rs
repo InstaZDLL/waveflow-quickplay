@@ -2,7 +2,9 @@
 //! audio files, per user, without an installer.
 //!
 //! - Windows: `HKCU\Software\Classes` only. Two verbs on every audio
-//!   extension and on folders ("Play with…", "Add to … playlist"), plus an
+//!   extension and on folders ("Play with…", "Add to … playlist"), each a
+//!   `DropTarget` on a COM class the executable serves (src/drop_verb.rs),
+//!   so a selection of any size reaches one process; plus an
 //!   `Applications\waveflow-quickplay.exe` entry so the player shows in
 //!   "Open with". The default handler is left alone: that is the user's
 //!   choice in Settings › Default apps.
@@ -75,6 +77,7 @@ pub fn relabel(lang: Lang) -> io::Result<bool> {
 #[cfg(windows)]
 mod platform {
     use super::*;
+    use crate::drop_verb::{ENQUEUE_CLSID, PLAY_CLSID};
     use std::process::Command;
     use waveflow_core::scanner::extract::AUDIO_EXTENSIONS;
 
@@ -88,44 +91,41 @@ mod platform {
     /// does not leave the entry twice.
     const LEGACY_ENQUEUE_VERB: &str = "WaveFlowQuickPlay.Enqueue";
     const APP_KEY: &str = r"HKEY_CURRENT_USER\Software\Classes\Applications\waveflow-quickplay.exe";
+    const CLSID_KEY: &str = r"HKEY_CURRENT_USER\Software\Classes\CLSID";
 
     /// `.reg` string syntax: backslashes and quotes escaped.
     fn reg_str(s: &str) -> String {
         format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
     }
 
-    fn verb_keys(t: &Strings) -> Vec<(String, &'static str, &'static str, bool)> {
-        // (key under HKCU\Software\Classes, label, extra arg, is_folder)
+    fn verb_keys(t: &Strings) -> Vec<(String, &'static str, &'static str)> {
+        // (key under HKCU\Software\Classes, label, class the selection is
+        // dropped on)
+        let bases = AUDIO_EXTENSIONS
+            .iter()
+            .map(|ext| format!(r"SystemFileAssociations\.{ext}\shell"))
+            .chain(std::iter::once(r"Directory\shell".to_string()));
         let mut out = Vec::new();
-        for ext in AUDIO_EXTENSIONS {
-            let base = format!(r"SystemFileAssociations\.{ext}\shell");
+        for base in bases {
             out.push((
                 format!(r"{base}\{PLAY_VERB}"),
                 t.action_play_with,
-                "",
-                false,
+                PLAY_CLSID,
             ));
             out.push((
                 format!(r"{base}\{ENQUEUE_VERB}"),
                 t.action_add_to_playlist,
-                "--enqueue",
-                false,
+                ENQUEUE_CLSID,
             ));
         }
-        out.push((
-            format!(r"Directory\shell\{PLAY_VERB}"),
-            t.action_play_with,
-            "",
-            true,
-        ));
-        out.push((
-            format!(r"Directory\shell\{ENQUEUE_VERB}"),
-            t.action_add_to_playlist,
-            "--enqueue",
-            true,
-        ));
         out
     }
+
+    /// The two classes Explorer drops a selection on, with their names.
+    const CLASSES: [(&str, &str); 2] = [
+        (PLAY_CLSID, "WaveFlow QuickPlay: play"),
+        (ENQUEUE_CLSID, "WaveFlow QuickPlay: add to playlist"),
+    ];
 
     /// `[-key]` lines for the verb keys of earlier versions.
     fn legacy_removals() -> String {
@@ -146,26 +146,26 @@ mod platform {
         let icon = format!("\"{exe}\",0");
         let mut s = String::from("Windows Registry Editor Version 5.00\r\n\r\n");
         s.push_str(&legacy_removals());
-        for (key, label, arg, is_folder) in verb_keys(t) {
-            let full = format!(r"HKEY_CURRENT_USER\Software\Classes\{key}");
+        for (clsid, name) in CLASSES {
+            // COM starts the executable with `-Embedding` when Explorer
+            // asks for the class (src/drop_verb.rs).
             s.push_str(&format!(
-                "[{full}]\r\n@={}\r\n\"Icon\"={}\r\n",
-                reg_str(label),
-                reg_str(&icon)
+                "[{CLSID_KEY}\\{clsid}]\r\n@={}\r\n\r\n[{CLSID_KEY}\\{clsid}\\LocalServer32]\r\n@={}\r\n\r\n",
+                reg_str(name),
+                reg_str(&format!("\"{exe}\""))
             ));
-            if !is_folder {
-                // One launch per selected file; the single-instance socket
-                // merges them into the open player.
-                s.push_str("\"MultiSelectModel\"=\"Player\"\r\n");
-            }
-            let cmd = if arg.is_empty() {
-                format!("\"{exe}\" \"%1\"")
-            } else {
-                format!("\"{exe}\" {arg} \"%1\"")
-            };
+        }
+        for (key, label, clsid) in verb_keys(t) {
+            let full = format!(r"HKEY_CURRENT_USER\Software\Classes\{key}");
+            // A `DropTarget` verb rather than a command: Explorer hands the
+            // whole selection to one QuickPlay instead of starting one per
+            // file. The command of earlier versions goes, so it cannot be
+            // the one Explorer picks.
             s.push_str(&format!(
-                "\r\n[{full}\\command]\r\n@={}\r\n\r\n",
-                reg_str(&cmd)
+                "[-{full}\\command]\r\n\r\n[{full}]\r\n@={}\r\n\"Icon\"={}\r\n\"MultiSelectModel\"=\"Player\"\r\n\r\n[{full}\\DropTarget]\r\n\"CLSID\"={}\r\n\r\n",
+                reg_str(label),
+                reg_str(&icon),
+                reg_str(clsid)
             ));
         }
         // "Open with" entry.
@@ -190,6 +190,9 @@ mod platform {
             ));
         }
         s.push_str(&legacy_removals());
+        for (clsid, _) in CLASSES {
+            s.push_str(&format!("[-{CLSID_KEY}\\{clsid}]\r\n\r\n"));
+        }
         s.push_str(&format!("[-{APP_KEY}]\r\n\r\n"));
         s
     }
@@ -341,13 +344,29 @@ mod platform {
             );
             assert!(s.contains("@=\"Lire avec QuickPlay\""));
             assert!(s.starts_with("Windows Registry Editor Version 5.00\r\n"));
+            // "Open with" keeps a command line.
             assert!(s.contains(r#"@="\"C:\\Program Files\\QP\\waveflow-quickplay.exe\" \"%1\"""#));
-            assert!(s.contains(
-                r#"@="\"C:\\Program Files\\QP\\waveflow-quickplay.exe\" --enqueue \"%1\"""#
-            ));
-            assert!(s.contains(r"[HKEY_CURRENT_USER\Software\Classes\SystemFileAssociations\.flac\shell\WaveFlowQuickPlay.Play\command]"));
-            assert!(s.contains(r"[HKEY_CURRENT_USER\Software\Classes\SystemFileAssociations\.flac\shell\WaveFlowQuickPlay.Playlist\command]"));
             assert!(s.contains("\".dsf\"=\"\""));
+            // The verbs are drop targets, served by the executable.
+            for clsid in [PLAY_CLSID, ENQUEUE_CLSID] {
+                assert!(s.contains(&format!(
+                    "[HKEY_CURRENT_USER\\Software\\Classes\\CLSID\\{clsid}\\LocalServer32]\r\n@=\"\\\"C:\\\\Program Files\\\\QP\\\\waveflow-quickplay.exe\\\"\"\r\n"
+                )));
+            }
+            let play = r"HKEY_CURRENT_USER\Software\Classes\SystemFileAssociations\.flac\shell\WaveFlowQuickPlay.Play";
+            let enqueue =
+                r"HKEY_CURRENT_USER\Software\Classes\Directory\shell\WaveFlowQuickPlay.Playlist";
+            for (key, clsid) in [(play, PLAY_CLSID), (enqueue, ENQUEUE_CLSID)] {
+                assert!(s.contains(&format!("[{key}\\DropTarget]\r\n\"CLSID\"=\"{clsid}\"\r\n")));
+                assert!(s.contains(&format!("[{key}]\r\n@=")));
+                // The 1.2.0 command goes, so the drop target is used.
+                assert!(s.contains(&format!("[-{key}\\command]")));
+            }
+            assert_eq!(
+                s.matches("\"MultiSelectModel\"=\"Player\"").count(),
+                2 * (AUDIO_EXTENSIONS.len() + 1)
+            );
+            assert!(!s.contains("--enqueue"));
             // The 1.0.0 key goes on every registration.
             assert!(s.contains(
                 r"[-HKEY_CURRENT_USER\Software\Classes\Directory\shell\WaveFlowQuickPlay.Enqueue]"
@@ -362,6 +381,38 @@ mod platform {
             assert!(
                 !r.contains(r"[-HKEY_CURRENT_USER\Software\Classes\SystemFileAssociations\.flac]")
             );
+            for clsid in [PLAY_CLSID, ENQUEUE_CLSID] {
+                assert!(r.contains(&format!(
+                    "[-HKEY_CURRENT_USER\\Software\\Classes\\CLSID\\{clsid}]"
+                )));
+            }
+        }
+
+        /// Everything the registration writes, the removal takes away: each
+        /// key it creates sits under one the removal deletes.
+        #[test]
+        fn removal_covers_every_registered_key() {
+            let s = registration_script(
+                std::path::Path::new(r"C:\QP\waveflow-quickplay.exe"),
+                Lang::En.strings(),
+            );
+            let removal = removal_script();
+            let removed: Vec<&str> = removal
+                .lines()
+                .filter_map(|l| l.strip_prefix("[-")?.strip_suffix(']'))
+                .collect();
+            for key in s
+                .lines()
+                .filter(|l| l.starts_with("[HKEY"))
+                .map(|l| l.trim_matches(['[', ']']))
+            {
+                assert!(
+                    removed
+                        .iter()
+                        .any(|r| key == *r || key.starts_with(&format!("{r}\\"))),
+                    "{key} is not removed"
+                );
+            }
         }
 
         /// Explorer orders the verbs by key name: "Play with…" must sort
