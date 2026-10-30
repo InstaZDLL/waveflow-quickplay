@@ -386,18 +386,35 @@ fn serve(
         while active.load(Ordering::Acquire) >= MAX_CLIENTS {
             std::thread::sleep(Duration::from_millis(5));
         }
-        active.fetch_add(1, Ordering::AcqRel);
-        let (tx, ctx, done) = (tx.clone(), ctx.clone(), active.clone());
+        let slot = Slot::take(&active);
+        let (tx, ctx) = (tx.clone(), ctx.clone());
+        // The slot goes back when the closure is dropped: after `handle`,
+        // when it panics, or when no thread could be spawned for it.
         let spawned = std::thread::Builder::new()
             .name("quickplay-ipc-client".into())
             .spawn(move || {
+                let _slot = slot;
                 handle(conn, &tx, &ctx);
-                done.fetch_sub(1, Ordering::AcqRel);
             });
         if let Err(e) = spawned {
-            active.fetch_sub(1, Ordering::AcqRel);
             tracing::warn!(error = %e, "ipc: no thread for a connection");
         }
+    }
+}
+
+/// One of the [`MAX_CLIENTS`] reading slots, given back on drop.
+struct Slot(Arc<AtomicUsize>);
+
+impl Slot {
+    fn take(active: &Arc<AtomicUsize>) -> Self {
+        active.fetch_add(1, Ordering::AcqRel);
+        Self(active.clone())
+    }
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
     }
 }
 
@@ -570,6 +587,19 @@ mod tests {
         assert!(read_message(&mut Cursor::new("play\n/a.flac\n/b.fl")).is_none());
         let many = format!("play\n{}\n", "/a.flac\n".repeat(MAX_PATHS + 1));
         assert!(read_message(&mut Cursor::new(many)).is_none());
+    }
+
+    #[test]
+    fn a_slot_comes_back_when_its_reader_panics() {
+        let active = Arc::new(AtomicUsize::new(0));
+        let slot = Slot::take(&active);
+        assert_eq!(active.load(Ordering::Acquire), 1);
+        let reader = std::thread::spawn(move || {
+            let _slot = slot;
+            panic!("reader failed");
+        });
+        assert!(reader.join().is_err());
+        assert_eq!(active.load(Ordering::Acquire), 0);
     }
 
     #[cfg(any(windows, target_os = "linux"))]

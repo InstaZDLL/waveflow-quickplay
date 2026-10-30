@@ -270,16 +270,22 @@ fn single_instance(mode: ipc::Mode, files: &[PathBuf]) -> Instance {
             }
             // Nobody listening, or the player is too busy to take them now.
             Ok(false) => {}
-            Err(e) if e.kind() == io::ErrorKind::TimedOut => {}
             // Paths the socket cannot carry, a socket held by another
             // user: trying again does not help.
-            Err(e) => {
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    io::ErrorKind::InvalidInput | io::ErrorKind::PermissionDenied
+                ) =>
+            {
                 tracing::warn!(error = %e, "single-instance check failed");
                 return match ipc::Server::start() {
                     Ok(server) => Instance::Listening(server),
                     Err(_) => Instance::Standalone,
                 };
             }
+            // A timeout, a pipe broken mid-exchange: tried again below.
+            Err(e) => tracing::debug!(error = %e, "hand-off failed, trying again"),
         }
         match ipc::Server::start() {
             Ok(server) => return Instance::Listening(server),
