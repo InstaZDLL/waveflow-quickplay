@@ -33,6 +33,7 @@ waveflow-quickplay
    ├── src/update.rs      update check at launch, signed download, install on close
    ├── src/restart.rs     restart under the other window system for the pin (Wayland)
    ├── src/integration.rs --register / --unregister (registry verbs, .desktop file)
+   ├── src/drop_verb.rs   Windows: Explorer's verbs as COM drop targets, one process per selection
    ├── src/platform.rs    Windows: owner link between the playlist window and the player
    ├── src/macos.rs       macOS: the files Finder opens (application:openURLs:)
    ├── src/ui/            theme, painted icons, widgets, player pane, playlist window, settings page
@@ -195,13 +196,27 @@ so another user could take the name first: there each end checks that the
 other runs as the same user (the token's user SID on Windows, the peer's
 uid on Linux), and a launch that finds a stranger opens its own window. The
 runtime directory is
-only used when this user owns it and nobody else can enter it. Explorer
-starts one process per selected file, so `play` messages arriving within
-half a second of each other are merged into one queue replacement.
+only used when this user owns it and nobody else can enter it. A file
+manager that starts one process per selected file (a Linux one, Explorer's
+"Open with") sends one `play` message each, so `play` messages arriving
+within half a second of each other are merged into one queue replacement.
 
 `--register` writes, for the current user only, the context-menu verbs and
 an "Open with" entry on Windows (`HKCU\Software\Classes`), or a `.desktop`
 entry with the audio MIME types and an "Add to playlist" action on Linux.
+On Windows the two verbs are `DropTarget` verbs, not command lines: a
+command-line verb starts one process per selected file, a thousand for a
+thousand files. Each verb names a COM class (`CLSID\{…}\LocalServer32`,
+the executable itself, per user like the rest), and Explorer drops the
+whole selection on it as one data object, with no limit on its size. COM
+starts QuickPlay once with `-Embedding`; `src/drop_verb.rs` serves the two
+classes (play, add to playlist) from a multithreaded apartment on a thread
+of its own, so winit still gets the main thread for OLE, reads the
+selection's paths from the data object, withdraws the classes and hands
+the paths to the usual start: over the socket to the running player, or a
+window of its own. A launch that is dropped nothing exits after thirty
+seconds. Registration deletes the `command` keys of earlier versions, so
+an upgrade does not keep the per-file command.
 The labels come from the interface language; the desktop entry carries all
 of them, and on Windows a language picked in the settings rewrites the
 registry labels when the running executable is the registered one (checked

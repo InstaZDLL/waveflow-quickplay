@@ -16,6 +16,8 @@ mod app;
 mod audio;
 mod capture;
 mod config;
+#[cfg(windows)]
+mod drop_verb;
 mod i18n;
 mod integration;
 mod ipc;
@@ -85,6 +87,10 @@ struct Args {
     after_pid: Option<u32>,
     /// Internal: XWayland failed to make the window, stay on Wayland.
     no_xwayland: bool,
+    /// Started by COM for an Explorer verb (`-Embedding`): the files come
+    /// as a drop, not on the command line (src/drop_verb.rs).
+    #[cfg(windows)]
+    embedding: bool,
 }
 
 /// Options are read up to `--`, after which everything is a file, so a
@@ -106,6 +112,8 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> Args {
                 parsed.after_pid = args.next().and_then(|p| p.to_str()?.parse().ok());
             }
             Some("--no-xwayland") => parsed.no_xwayland = true,
+            #[cfg(windows)]
+            Some("-Embedding" | "/Embedding") => parsed.embedding = true,
             Some("--version" | "-V") => parsed.version = true,
             Some("--help" | "-h") => parsed.help = true,
             Some("--register") => parsed.register = true,
@@ -176,6 +184,18 @@ fn main() -> eframe::Result {
         ipc::Mode::Play
     };
     let files = args.files;
+    // Started by COM for "Play with" / "Add to playlist": the whole Explorer
+    // selection arrives as one drop, then goes where a command line's files
+    // go.
+    #[cfg(windows)]
+    let (mode, files) = if args.embedding {
+        match drop_verb::receive() {
+            Some(dropped) => dropped,
+            None => return Ok(()),
+        }
+    } else {
+        (mode, files)
+    };
 
     // Restarted for the pin: the previous QuickPlay hands over the socket
     // and the device by exiting, and where it was comes from its file.
@@ -374,6 +394,21 @@ mod tests {
         let a = parse(&["--after-pid", "not-a-pid", "a.flac"]);
         assert_eq!(a.after_pid, None);
         assert_eq!(a.files, [PathBuf::from("a.flac")]);
+    }
+
+    /// COM starts the verb server with `-Embedding` (or `/Embedding`): an
+    /// option, not a file to open.
+    #[cfg(windows)]
+    #[test]
+    fn embedding_is_the_verb_server_not_a_file() {
+        for flag in ["-Embedding", "/Embedding"] {
+            let a = parse(&[flag]);
+            assert!(a.embedding, "{flag}");
+            assert!(a.files.is_empty() && a.unknown.is_empty());
+        }
+        let a = parse(&["--", "-Embedding"]);
+        assert!(!a.embedding);
+        assert_eq!(a.files, [PathBuf::from("-Embedding")]);
     }
 
     #[cfg(unix)]
