@@ -479,10 +479,37 @@ fn digest(message: &Message) -> u64 {
     hasher.finish()
 }
 
+/// The process at the other end of `conn`: a pipe's client on Windows, a
+/// socket's peer on Linux (`SO_PEERCRED`) and on macOS (`LOCAL_PEERPID`,
+/// which interprocess does not read there).
+#[cfg(not(target_os = "macos"))]
+fn peer_pid(conn: &Stream) -> Option<i64> {
+    conn.peer_creds().ok().and_then(|c| c.pid()).map(i64::from)
+}
+
+#[cfg(target_os = "macos")]
+fn peer_pid(conn: &Stream) -> Option<i64> {
+    use std::os::fd::{AsFd, AsRawFd};
+    let Stream::UdSocket(socket) = conn;
+    let mut pid: libc::pid_t = 0;
+    let mut len = std::mem::size_of::<libc::pid_t>() as libc::socklen_t;
+    // SAFETY: the descriptor is a connected socket borrowed from `conn`;
+    // `pid` and `len` are valid for writes of the sizes given.
+    let got = unsafe {
+        libc::getsockopt(
+            socket.as_fd().as_raw_fd(),
+            libc::SOL_LOCAL,
+            libc::LOCAL_PEERPID,
+            (&raw mut pid).cast(),
+            &raw mut len,
+        )
+    };
+    (got == 0 && pid > 0).then(|| i64::from(pid))
+}
+
 fn handle(conn: Stream, tx: &Sender<Message>, ctx: &CtxSlot, taken: &Taken) {
-    // Where the platform says (a pipe's client process, a socket's peer on
-    // Linux); without it a try is never recognised as a repeat.
-    let peer = conn.peer_creds().ok().and_then(|c| c.pid()).map(i64::from);
+    // Without the sender's process a try is never recognised as a repeat.
+    let peer = peer_pid(&conn);
     // One deadline for the whole message: named pipes have no read
     // timeout, and a per-read timeout on a Unix socket lets a client that
     // sends a byte now and then hold its slot forever. Unix sockets are
@@ -704,12 +731,22 @@ mod tests {
         assert!(taken_lately(&mut taken, key, now));
     }
 
-    #[cfg(any(windows, target_os = "linux"))]
+    #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
     #[test]
     fn a_hand_off_tried_again_is_queued_once() {
+        let base = format!("waveflow-quickplay-retry-{}.sock", std::process::id());
+        #[cfg(not(target_os = "macos"))]
+        let name = || base.clone().to_ns_name::<GenericNamespaced>().unwrap();
+        // macOS has no abstract namespace: a socket file of its own.
+        #[cfg(target_os = "macos")]
+        let path = std::env::temp_dir().join(&base);
+        #[cfg(target_os = "macos")]
+        let _ = std::fs::remove_file(&path);
+        #[cfg(target_os = "macos")]
         let name = || {
-            format!("waveflow-quickplay-retry-{}.sock", std::process::id())
-                .to_ns_name::<GenericNamespaced>()
+            path.clone()
+                .into_os_string()
+                .to_fs_name::<GenericFilePath>()
                 .unwrap()
         };
         let listener = listen(name()).unwrap();
