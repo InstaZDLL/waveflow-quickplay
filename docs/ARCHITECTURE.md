@@ -187,10 +187,17 @@ that is cut short or over a cap gets no `ok`. A path that is not UTF-8 or
 holds a line break is not sent: that launch opens a window of its own. The
 server reads each connection on a thread of its own, eight at most, and
 gives each message two seconds in all (a Unix socket is read nonblocking, a
-pipe is peeked before each read, since it has no timeouts); the client
-gives up after three seconds and, once it has, sends nothing even if its
-connection gets through later. A client that never finishes, or an
-instance that never answers, holds up nothing else for long. Pipe names and the abstract namespace are machine-wide,
+pipe is peeked before each read, since it has no timeouts); a ninth waits
+for a slot. The client gives up after three seconds and, once it has, sends
+nothing even if its connection gets through later. A client that never
+finishes, or an instance that never answers, holds up nothing else for long.
+
+The single instance is strict: a launch that finds the socket taken (a pipe
+created exclusive reports "access denied", read as `AddrInUse`) or the
+player too busy to answer tries again for up to thirty seconds and then
+exits; it never opens a window of its own. Explorer starts one process per
+selected file, so a selection of a thousand files is a thousand launches at
+once, and up to 1024 messages wait for the window to come up. Pipe names and the abstract namespace are machine-wide,
 so another user could take the name first: there each end checks that the
 other runs as the same user (the token's user SID on Windows, the peer's
 uid on Linux), and a launch that finds a stranger opens its own window. The

@@ -66,10 +66,12 @@ const CLIENT_TIMEOUT: Duration = Duration::from_secs(3);
 /// Longest the server waits for a client to finish its message, all reads
 /// together.
 const MESSAGE_DEADLINE: Duration = Duration::from_secs(2);
-/// Connections read at the same time. One more is closed unread.
+/// Connections read at the same time. One more waits for a slot.
 const MAX_CLIENTS: usize = 8;
 /// Messages taken and not yet picked up by the UI. One more is refused.
-const MAX_QUEUED: usize = 64;
+/// Room for a large selection handed over before the window is up, one
+/// message per file.
+const MAX_QUEUED: usize = 1024;
 
 /// The socket's name, its file when it has one, and whether its name is
 /// machine-wide (a Windows pipe, the Linux abstract namespace): anyone can
@@ -290,10 +292,7 @@ impl Server {
     pub fn start() -> io::Result<Self> {
         let point = endpoint()?;
         let socket_path = point.path.clone();
-        let listener = match ListenerOptions::new()
-            .name(point.name.clone())
-            .create_sync()
-        {
+        let listener = match listen(point.name.clone()) {
             Err(e) if e.kind() == io::ErrorKind::AddrInUse && socket_path.is_some() => {
                 // Either a file left by a crashed instance, or an instance
                 // that came up between our connect attempt and now. Only a
@@ -344,6 +343,23 @@ impl Drop for Server {
     }
 }
 
+/// Creates the listener. A pipe whose name is taken fails on Windows with
+/// "access denied" (the first instance is created exclusive), reported here
+/// as `AddrInUse` like a Unix socket, so a launch that loses the start race
+/// hands its files over instead of opening a window of its own.
+fn listen(name: Name<'static>) -> io::Result<interprocess::local_socket::Listener> {
+    match ListenerOptions::new().name(name).create_sync() {
+        #[cfg(windows)]
+        Err(e)
+            if e.raw_os_error()
+                == Some(windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED as i32) =>
+        {
+            Err(io::Error::new(io::ErrorKind::AddrInUse, e))
+        }
+        other => other,
+    }
+}
+
 fn serve(
     listener: interprocess::local_socket::Listener,
     tx: Sender<Message>,
@@ -363,9 +379,12 @@ fn serve(
             tracing::warn!("ipc: connection from another user refused");
             continue;
         }
-        if active.load(Ordering::Acquire) >= MAX_CLIENTS {
-            tracing::warn!("ipc: too many connections at once, one refused");
-            continue;
+        // A burst (the file manager starts one launch per selected file)
+        // waits for a slot rather than being refused: a refused launch
+        // would open a window of its own. Every slot is freed within
+        // MESSAGE_DEADLINE, so the wait is bounded.
+        while active.load(Ordering::Acquire) >= MAX_CLIENTS {
+            std::thread::sleep(Duration::from_millis(5));
         }
         active.fetch_add(1, Ordering::AcqRel);
         let (tx, ctx, done) = (tx.clone(), ctx.clone(), active.clone());
@@ -551,6 +570,19 @@ mod tests {
         assert!(read_message(&mut Cursor::new("play\n/a.flac\n/b.fl")).is_none());
         let many = format!("play\n{}\n", "/a.flac\n".repeat(MAX_PATHS + 1));
         assert!(read_message(&mut Cursor::new(many)).is_none());
+    }
+
+    #[cfg(any(windows, target_os = "linux"))]
+    #[test]
+    fn a_taken_name_is_addr_in_use() {
+        let name = || {
+            format!("waveflow-quickplay-test-{}.sock", std::process::id())
+                .to_ns_name::<GenericNamespaced>()
+                .unwrap()
+        };
+        let _first = listen(name()).unwrap();
+        let err = listen(name()).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::AddrInUse);
     }
 
     #[test]
