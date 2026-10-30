@@ -33,6 +33,7 @@ waveflow-quickplay
    ├── src/update.rs      update check at launch, signed download, install on close
    ├── src/restart.rs     restart under the other window system for the pin (Wayland)
    ├── src/integration.rs --register / --unregister (registry verbs, .desktop file)
+   ├── src/drop_verb.rs   Windows: Explorer's verbs as COM drop targets, one process per selection
    ├── src/platform.rs    Windows: owner link between the playlist window and the player
    ├── src/macos.rs       macOS: the files Finder opens (application:openURLs:)
    ├── src/ui/            theme, painted icons, widgets, player pane, playlist window, settings page
@@ -192,16 +193,20 @@ for a slot. Each hand-off gives up after three seconds and, once it has,
 sends nothing even if its connection gets through later. A client that
 never finishes holds up the other launches for two seconds at most; an
 instance that never answers keeps each launch trying for up to thirty
-seconds, as below.
+seconds, as below. A launch whose message was taken but whose `ok` was
+lost tries again; the server remembers for a minute what each process
+handed over and answers such a repeat without queueing the files twice.
 
 The single instance is strict: a launch that finds the socket taken (a pipe
 created exclusive reports "access denied", read as `AddrInUse`) or the
 player too busy to answer tries again for up to thirty seconds and then
-exits. In that case it never opens a window of its own. Explorer starts
-one process per selected file, so a selection of a thousand files is a
-thousand launches at once: up to 1024 messages wait for the window to come
-up, and `play` messages arriving within half a second of each other are
-merged into one queue replacement.
+exits. In that case it never opens a window of its own. A socket file it
+cannot bind is removed only when connecting to it is refused: one that
+answers, or keeps the connect waiting, belongs to a live player. A file
+manager that starts one process per selected file (a Linux one, Explorer's
+"Open with") sends a burst of launches: up to 1024 messages wait for the
+window to come up, and `play` messages arriving within half a second of
+each other are merged into one queue replacement.
 
 Pipe names and the abstract namespace are machine-wide, so another user
 could take the name first: there each end checks that the other runs as the
@@ -212,6 +217,21 @@ only used when this user owns it and nobody else can enter it.
 `--register` writes, for the current user only, the context-menu verbs and
 an "Open with" entry on Windows (`HKCU\Software\Classes`), or a `.desktop`
 entry with the audio MIME types and an "Add to playlist" action on Linux.
+On Windows the two verbs are `DropTarget` verbs, not command lines: a
+command-line verb starts one process per selected file, a thousand for a
+thousand files. Each verb names a COM class (`CLSID\{…}\LocalServer32`,
+the executable itself, per user like the rest), and Explorer drops the
+whole selection on it as one data object; Explorer sets no limit on its
+size, but the socket does: a selection over its caps (10 000 paths, 4 MiB)
+is not handed to the running player and opens a window of its own. COM
+starts QuickPlay once with `-Embedding`; `src/drop_verb.rs` serves the two
+classes (play, add to playlist) from a multithreaded apartment on a thread
+of its own, so winit still gets the main thread for OLE, reads the
+selection's paths from the data object, withdraws the classes and hands
+the paths to the usual start: over the socket to the running player, or a
+window of its own. A launch that is dropped nothing exits after thirty
+seconds. Registration deletes the `command` keys of earlier versions, so
+an upgrade does not keep the per-file command.
 The labels come from the interface language; the desktop entry carries all
 of them, and on Windows a language picked in the settings rewrites the
 registry labels when the running executable is the registered one (checked
