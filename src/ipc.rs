@@ -737,11 +737,23 @@ mod tests {
         let base = format!("waveflow-quickplay-retry-{}.sock", std::process::id());
         #[cfg(not(target_os = "macos"))]
         let name = || base.clone().to_ns_name::<GenericNamespaced>().unwrap();
-        // macOS has no abstract namespace: a socket file of its own.
+        // macOS has no abstract namespace: a socket file, in a directory
+        // made for this run with mode 0700. Creating it fails if anything
+        // is already there, so it is never someone else's, even when the
+        // temporary directory is the shared /tmp.
         #[cfg(target_os = "macos")]
-        let path = std::env::temp_dir().join(&base);
+        let dir = {
+            use std::os::unix::fs::DirBuilderExt;
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let dir = std::env::temp_dir().join(format!("{base}-{nanos}"));
+            std::fs::DirBuilder::new().mode(0o700).create(&dir).unwrap();
+            dir
+        };
         #[cfg(target_os = "macos")]
-        let _ = std::fs::remove_file(&path);
+        let path = dir.join("retry.sock");
         #[cfg(target_os = "macos")]
         let name = || {
             path.clone()
@@ -777,6 +789,8 @@ mod tests {
             })
             .collect();
         assert_eq!(got, [["a.flac"], ["b.flac"]]);
+        #[cfg(target_os = "macos")]
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
