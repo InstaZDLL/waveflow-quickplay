@@ -204,8 +204,9 @@ exits. In that case it never opens a window of its own. A socket file it
 cannot bind is removed only when connecting to it is refused: one that
 answers, or keeps the connect waiting, belongs to a live player. A file
 manager that starts one process per selected file (a Linux one, Explorer's
-"Open with") sends a burst of launches: up to 1024 messages wait for the
-window to come up, and `play` messages arriving within half a second of
+"Open with"; Explorer's own verbs start one, see below) makes a selection
+of a thousand files a thousand launches at once: up to 1024 messages wait
+for the window to come up, and `play` messages arriving within half a second of
 each other are merged into one queue replacement.
 
 Pipe names and the abstract namespace are machine-wide, so another user
