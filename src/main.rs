@@ -34,8 +34,10 @@ mod waveflow;
 
 use std::cell::Cell;
 use std::ffi::OsString;
+use std::io;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use tracing_subscriber::EnvFilter;
 
@@ -204,59 +206,19 @@ fn main() -> eframe::Result {
     }
     let resume = args.restart_state.as_deref().and_then(restart::take_state);
 
-    // Single instance: hand the files to a running player if there is one;
-    // otherwise become the one that listens. Losing the creation race means
-    // another launch is starting right now, so hand over to it instead. A
-    // restart is the running player itself and hands nothing over.
-    if resume.is_none() {
-        match ipc::send(mode, &files) {
-            Ok(true) => {
-                tracing::info!(files = files.len(), "handed to the running instance");
-                return Ok(());
-            }
-            Ok(false) => {}
-            Err(e) => tracing::warn!(error = %e, "single-instance check failed"),
-        }
-    }
-    // A restart takes the socket over from the previous process, waiting
-    // for it to let go if it is slow to exit.
-    let started_server = if resume.is_some() {
+    // A restart is the running player itself: it takes the socket over from
+    // the previous process, waiting for it to let go if it is slow to exit.
+    let server = if resume.is_some() {
         restart::take_over_socket()
+            .map_err(|e| {
+                tracing::warn!(error = %e, "single-instance socket unavailable; running standalone");
+            })
+            .ok()
     } else {
-        ipc::Server::start()
-    };
-    let server = match started_server {
-        Ok(s) => Some(s),
-        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse && resume.is_none() => {
-            let mut handed = false;
-            for _ in 0..20 {
-                std::thread::sleep(std::time::Duration::from_millis(50));
-                match ipc::send(mode, &files) {
-                    Ok(true) => {
-                        handed = true;
-                        break;
-                    }
-                    Ok(false) => {}
-                    // Paths the socket cannot carry, or an instance that
-                    // does not answer: waiting longer does not help.
-                    Err(e) => {
-                        tracing::warn!(error = %e, "hand-off failed");
-                        break;
-                    }
-                }
-            }
-            if handed {
-                tracing::info!("handed to the instance that won the start race");
-                return Ok(());
-            }
-            tracing::warn!(
-                "another instance holds the socket but does not answer; running standalone"
-            );
-            None
-        }
-        Err(e) => {
-            tracing::warn!(error = %e, "single-instance socket unavailable; running standalone");
-            None
+        match single_instance(mode, &files) {
+            Instance::Exit => return Ok(()),
+            Instance::Listening(server) => Some(server),
+            Instance::Standalone => None,
         }
     };
 
@@ -295,6 +257,72 @@ fn main() -> eframe::Result {
         }
     }
     result
+}
+
+/// What a launch does after looking for a running player.
+enum Instance {
+    /// Another QuickPlay took the files, or holds the socket and never
+    /// took them: no window either way.
+    Exit,
+    /// This launch is the player and listens for the next ones.
+    Listening(ipc::Server),
+    /// No socket can be had: a player of its own, not reachable.
+    Standalone,
+}
+
+/// How long a launch keeps trying to reach the QuickPlay that holds the
+/// socket. The file manager starts one launch per selected file, thousands
+/// for a large selection, and the player takes them a few at a time.
+const HAND_OFF_DEADLINE: Duration = Duration::from_secs(30);
+
+/// Single instance, strictly: hand the files to the running player, or
+/// become the one that listens. A launch that finds the socket taken
+/// (another one is starting right now, or the player is busy with a burst)
+/// keeps trying and never opens a window of its own: a burst of launches
+/// would otherwise open one each.
+fn single_instance(mode: ipc::Mode, files: &[PathBuf]) -> Instance {
+    let deadline = Instant::now() + HAND_OFF_DEADLINE;
+    loop {
+        match ipc::send(mode, files) {
+            Ok(true) => {
+                tracing::info!(files = files.len(), "handed to the running instance");
+                return Instance::Exit;
+            }
+            // Nobody listening, or the player is too busy to take them now.
+            Ok(false) => {}
+            // Paths the socket cannot carry, a socket held by another
+            // user: trying again does not help.
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    io::ErrorKind::InvalidInput | io::ErrorKind::PermissionDenied
+                ) =>
+            {
+                tracing::warn!(error = %e, "single-instance check failed");
+                return match ipc::Server::start() {
+                    Ok(server) => Instance::Listening(server),
+                    Err(_) => Instance::Standalone,
+                };
+            }
+            // A timeout, a pipe broken mid-exchange: tried again below.
+            Err(e) => tracing::debug!(error = %e, "hand-off failed, trying again"),
+        }
+        match ipc::Server::start() {
+            Ok(server) => return Instance::Listening(server),
+            Err(e) if e.kind() == io::ErrorKind::AddrInUse => {}
+            Err(e) => {
+                tracing::warn!(error = %e, "single-instance socket unavailable; running standalone");
+                return Instance::Standalone;
+            }
+        }
+        if Instant::now() >= deadline {
+            tracing::warn!(
+                "another instance holds the socket but does not take the files; giving up"
+            );
+            return Instance::Exit;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 
 /// The window as the settings leave it, under X11 when `x11` (XWayland in

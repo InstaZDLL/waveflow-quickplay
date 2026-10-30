@@ -188,18 +188,32 @@ that is cut short or over a cap gets no `ok`. A path that is not UTF-8 or
 holds a line break is not sent: that launch opens a window of its own. The
 server reads each connection on a thread of its own, eight at most, and
 gives each message two seconds in all (a Unix socket is read nonblocking, a
-pipe is peeked before each read, since it has no timeouts); the client
-gives up after three seconds and, once it has, sends nothing even if its
-connection gets through later. A client that never finishes, or an
-instance that never answers, holds up nothing else for long. Pipe names and the abstract namespace are machine-wide,
-so another user could take the name first: there each end checks that the
-other runs as the same user (the token's user SID on Windows, the peer's
-uid on Linux), and a launch that finds a stranger opens its own window. The
-runtime directory is
-only used when this user owns it and nobody else can enter it. A file
+pipe is peeked before each read, since it has no timeouts); a ninth waits
+for a slot. Each hand-off gives up after three seconds and, once it has,
+sends nothing even if its connection gets through later. A client that
+never finishes holds up the other launches for two seconds at most; an
+instance that never answers keeps each launch trying for up to thirty
+seconds, as below. A launch whose message was taken but whose `ok` was
+lost tries again; the server remembers for a minute what each process
+handed over and answers such a repeat without queueing the files twice.
+
+The single instance is strict: a launch that finds the socket taken (a pipe
+created exclusive reports "access denied", read as `AddrInUse`) or the
+player too busy to answer tries again for up to thirty seconds and then
+exits. In that case it never opens a window of its own. A socket file it
+cannot bind is removed only when connecting to it is refused: one that
+answers, or keeps the connect waiting, belongs to a live player. A file
 manager that starts one process per selected file (a Linux one, Explorer's
-"Open with") sends one `play` message each, so `play` messages arriving
-within half a second of each other are merged into one queue replacement.
+"Open with"; Explorer's own verbs start one, see below) makes a selection
+of a thousand files a thousand launches at once: up to 1024 messages wait
+for the window to come up, and `play` messages arriving within half a second of
+each other are merged into one queue replacement.
+
+Pipe names and the abstract namespace are machine-wide, so another user
+could take the name first: there each end checks that the other runs as the
+same user (the token's user SID on Windows, the peer's uid on Linux), and a
+launch that finds a stranger opens its own window. The runtime directory is
+only used when this user owns it and nobody else can enter it.
 
 `--register` writes, for the current user only, the context-menu verbs and
 an "Open with" entry on Windows (`HKCU\Software\Classes`), or a `.desktop`

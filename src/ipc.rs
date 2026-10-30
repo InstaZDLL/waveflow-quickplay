@@ -22,10 +22,12 @@
 //! never finishes cannot hold up the launches after it, and a server that
 //! never answers cannot hang one.
 
+use std::collections::HashMap;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender, TrySendError};
@@ -33,7 +35,7 @@ use interprocess::local_socket::{
     prelude::*, GenericFilePath, GenericNamespaced, ListenerOptions, Name, Stream,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Mode {
     /// Replace the queue with these files and play them.
     Play,
@@ -66,10 +68,12 @@ const CLIENT_TIMEOUT: Duration = Duration::from_secs(3);
 /// Longest the server waits for a client to finish its message, all reads
 /// together.
 const MESSAGE_DEADLINE: Duration = Duration::from_secs(2);
-/// Connections read at the same time. One more is closed unread.
+/// Connections read at the same time. One more waits for a slot.
 const MAX_CLIENTS: usize = 8;
 /// Messages taken and not yet picked up by the UI. One more is refused.
-const MAX_QUEUED: usize = 64;
+/// Room for a large selection handed over before the window is up, one
+/// message per file.
+const MAX_QUEUED: usize = 1024;
 
 /// The socket's name, its file when it has one, and whether its name is
 /// machine-wide (a Windows pipe, the Linux abstract namespace): anyone can
@@ -290,16 +294,20 @@ impl Server {
     pub fn start() -> io::Result<Self> {
         let point = endpoint()?;
         let socket_path = point.path.clone();
-        let listener = match ListenerOptions::new()
-            .name(point.name.clone())
-            .create_sync()
-        {
+        let listener = match listen(point.name.clone()) {
             Err(e) if e.kind() == io::ErrorKind::AddrInUse && socket_path.is_some() => {
                 // Either a file left by a crashed instance, or an instance
                 // that came up between our connect attempt and now. Only a
-                // socket nobody answers is stale; a live one is handed to.
-                if Stream::connect(point.name.clone()).is_ok() {
-                    return Err(e);
+                // socket that refuses the connection is stale; one that
+                // answers, is too busy to, or fails some other way is left
+                // alone and reported as taken, so the caller tries again.
+                match answers(point.name.clone()) {
+                    Ok(false) => {}
+                    Ok(true) => return Err(e),
+                    Err(probe) => {
+                        tracing::warn!(error = %probe, "ipc: socket file neither live nor stale");
+                        return Err(e);
+                    }
                 }
                 let path = socket_path.as_deref().expect("checked");
                 std::fs::remove_file(path)?;
@@ -344,6 +352,48 @@ impl Drop for Server {
     }
 }
 
+/// Whether something listens on `name`, within [`CLIENT_TIMEOUT`]: `true`
+/// when it accepts or keeps the connect waiting (a busy listener), `false`
+/// when the connection is refused or the socket is gone (a stale file).
+/// Any other error is the caller's to judge.
+fn answers(name: Name<'static>) -> io::Result<bool> {
+    let (tx, rx) = crossbeam_channel::bounded(1);
+    std::thread::Builder::new()
+        .name("quickplay-ipc-probe".into())
+        .spawn(move || {
+            let _ = tx.send(Stream::connect(name).map(drop));
+        })?;
+    match rx.recv_timeout(CLIENT_TIMEOUT) {
+        Ok(Ok(())) | Err(_) => Ok(true),
+        Ok(Err(e))
+            if matches!(
+                e.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
+            ) =>
+        {
+            Ok(false)
+        }
+        Ok(Err(e)) => Err(e),
+    }
+}
+
+/// Creates the listener. A pipe whose name is taken fails on Windows with
+/// "access denied" (the first instance is created exclusive), reported here
+/// as `AddrInUse` like a Unix socket, so a launch that loses the start race
+/// hands its files over instead of opening a window of its own.
+fn listen(name: Name<'static>) -> io::Result<interprocess::local_socket::Listener> {
+    match ListenerOptions::new().name(name).create_sync() {
+        #[cfg(windows)]
+        Err(e)
+            if e.raw_os_error()
+                == Some(windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED as i32) =>
+        {
+            Err(io::Error::new(io::ErrorKind::AddrInUse, e))
+        }
+        other => other,
+    }
+}
+
 fn serve(
     listener: interprocess::local_socket::Listener,
     tx: Sender<Message>,
@@ -351,6 +401,7 @@ fn serve(
     check_peer: bool,
 ) {
     let active = Arc::new(AtomicUsize::new(0));
+    let taken = Taken::default();
     for conn in listener.incoming() {
         let conn = match conn {
             Ok(c) => c,
@@ -363,26 +414,102 @@ fn serve(
             tracing::warn!("ipc: connection from another user refused");
             continue;
         }
-        if active.load(Ordering::Acquire) >= MAX_CLIENTS {
-            tracing::warn!("ipc: too many connections at once, one refused");
-            continue;
+        // A burst (the file manager starts one launch per selected file)
+        // waits for a slot rather than being refused: a refused launch
+        // would open a window of its own. Every slot is freed within
+        // MESSAGE_DEADLINE, so the wait is bounded.
+        while active.load(Ordering::Acquire) >= MAX_CLIENTS {
+            std::thread::sleep(Duration::from_millis(5));
         }
-        active.fetch_add(1, Ordering::AcqRel);
-        let (tx, ctx, done) = (tx.clone(), ctx.clone(), active.clone());
+        let slot = Slot::take(&active);
+        let (tx, ctx, taken) = (tx.clone(), ctx.clone(), taken.clone());
+        // The slot goes back when the closure is dropped: after `handle`,
+        // when it panics, or when no thread could be spawned for it.
         let spawned = std::thread::Builder::new()
             .name("quickplay-ipc-client".into())
             .spawn(move || {
-                handle(conn, &tx, &ctx);
-                done.fetch_sub(1, Ordering::AcqRel);
+                let _slot = slot;
+                handle(conn, &tx, &ctx, &taken);
             });
         if let Err(e) = spawned {
-            active.fetch_sub(1, Ordering::AcqRel);
             tracing::warn!(error = %e, "ipc: no thread for a connection");
         }
     }
 }
 
-fn handle(conn: Stream, tx: &Sender<Message>, ctx: &CtxSlot) {
+/// One of the [`MAX_CLIENTS`] reading slots, given back on drop.
+struct Slot(Arc<AtomicUsize>);
+
+impl Slot {
+    fn take(active: &Arc<AtomicUsize>) -> Self {
+        active.fetch_add(1, Ordering::AcqRel);
+        Self(active.clone())
+    }
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// How long a hand-off taken is remembered: longer than a launch keeps
+/// trying (`HAND_OFF_DEADLINE` in main.rs).
+const REMEMBER_TAKEN: Duration = Duration::from_secs(60);
+
+/// Hand-offs taken lately, by the process that sent them and what they
+/// carried. A launch whose message was queued but whose `ok` never reached
+/// it (a timeout, a pipe broken after the write) tries again: that second
+/// try is answered without its files being queued twice. Two launches
+/// with the same files are two processes, so both are queued.
+type Taken = Arc<Mutex<HashMap<(i64, u64), Instant>>>;
+
+/// Whether `key` was taken less than [`REMEMBER_TAKEN`] before `now`. Older
+/// entries are forgotten first, so a process id the system has reused, with
+/// the same files, is not mistaken for a retry.
+fn taken_lately(taken: &mut HashMap<(i64, u64), Instant>, key: (i64, u64), now: Instant) -> bool {
+    taken.retain(|_, at| now.saturating_duration_since(*at) < REMEMBER_TAKEN);
+    taken.contains_key(&key)
+}
+
+fn digest(message: &Message) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    message.mode.hash(&mut hasher);
+    message.paths.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// The process at the other end of `conn`: a pipe's client on Windows, a
+/// socket's peer on Linux (`SO_PEERCRED`) and on macOS (`LOCAL_PEERPID`,
+/// which interprocess does not read there).
+#[cfg(not(target_os = "macos"))]
+fn peer_pid(conn: &Stream) -> Option<i64> {
+    conn.peer_creds().ok().and_then(|c| c.pid()).map(i64::from)
+}
+
+#[cfg(target_os = "macos")]
+fn peer_pid(conn: &Stream) -> Option<i64> {
+    use std::os::fd::{AsFd, AsRawFd};
+    let Stream::UdSocket(socket) = conn;
+    let mut pid: libc::pid_t = 0;
+    let mut len = std::mem::size_of::<libc::pid_t>() as libc::socklen_t;
+    // SAFETY: the descriptor is a connected socket borrowed from `conn`;
+    // `pid` and `len` are valid for writes of the sizes given.
+    let got = unsafe {
+        libc::getsockopt(
+            socket.as_fd().as_raw_fd(),
+            libc::SOL_LOCAL,
+            libc::LOCAL_PEERPID,
+            (&raw mut pid).cast(),
+            &raw mut len,
+        )
+    };
+    (got == 0 && pid > 0).then(|| i64::from(pid))
+}
+
+fn handle(conn: Stream, tx: &Sender<Message>, ctx: &CtxSlot, taken: &Taken) {
+    // Without the sender's process a try is never recognised as a repeat.
+    let peer = peer_pid(&conn);
     // One deadline for the whole message: named pipes have no read
     // timeout, and a per-read timeout on a Unix socket lets a client that
     // sends a byte now and then hold its slot forever. Unix sockets are
@@ -400,18 +527,29 @@ fn handle(conn: Stream, tx: &Sender<Message>, ctx: &CtxSlot) {
     let Some(message) = read_message(&mut reader) else {
         return;
     };
-    tracing::info!(mode = ?message.mode, paths = message.paths.len(), "ipc: files received");
-    match tx.try_send(message) {
-        Ok(()) => {}
-        Err(TrySendError::Full(_)) => {
-            tracing::warn!("ipc: the player is not taking messages, one refused");
-            return;
-        }
-        Err(TrySendError::Disconnected(_)) => return,
-    }
-    if let Ok(slot) = ctx.lock() {
-        if let Some(ctx) = slot.as_ref() {
-            ctx.request_repaint();
+    let key = peer.map(|pid| (pid, digest(&message)));
+    {
+        let mut taken = taken.lock().unwrap_or_else(PoisonError::into_inner);
+        if key.is_some_and(|key| taken_lately(&mut taken, key, Instant::now())) {
+            tracing::info!("ipc: a hand-off tried again, already taken");
+        } else {
+            tracing::info!(mode = ?message.mode, paths = message.paths.len(), "ipc: files received");
+            match tx.try_send(message) {
+                Ok(()) => {}
+                Err(TrySendError::Full(_)) => {
+                    tracing::warn!("ipc: the player is not taking messages, one refused");
+                    return;
+                }
+                Err(TrySendError::Disconnected(_)) => return,
+            }
+            if let Some(key) = key {
+                taken.insert(key, Instant::now());
+            }
+            if let Ok(slot) = ctx.lock() {
+                if let Some(ctx) = slot.as_ref() {
+                    ctx.request_repaint();
+                }
+            }
         }
     }
     let conn = &mut reader.get_mut().inner;
@@ -551,6 +689,118 @@ mod tests {
         assert!(read_message(&mut Cursor::new("play\n/a.flac\n/b.fl")).is_none());
         let many = format!("play\n{}\n", "/a.flac\n".repeat(MAX_PATHS + 1));
         assert!(read_message(&mut Cursor::new(many)).is_none());
+    }
+
+    #[test]
+    fn a_slot_comes_back_when_its_reader_panics() {
+        let active = Arc::new(AtomicUsize::new(0));
+        let slot = Slot::take(&active);
+        assert_eq!(active.load(Ordering::Acquire), 1);
+        let reader = std::thread::spawn(move || {
+            let _slot = slot;
+            panic!("reader failed");
+        });
+        assert!(reader.join().is_err());
+        assert_eq!(active.load(Ordering::Acquire), 0);
+    }
+
+    #[cfg(any(windows, target_os = "linux"))]
+    #[test]
+    fn a_taken_name_is_addr_in_use() {
+        let name = || {
+            format!("waveflow-quickplay-test-{}.sock", std::process::id())
+                .to_ns_name::<GenericNamespaced>()
+                .unwrap()
+        };
+        let _first = listen(name()).unwrap();
+        let err = listen(name()).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::AddrInUse);
+    }
+
+    #[test]
+    fn a_hand_off_taken_long_ago_is_not_a_retry() {
+        let key = (4242, 7);
+        let now = Instant::now();
+        let mut taken = HashMap::new();
+        // The same process id and files, seen more than a minute ago: the
+        // id was reused by a new launch, whose files must be queued.
+        taken.insert(key, now - REMEMBER_TAKEN - Duration::from_secs(1));
+        assert!(!taken_lately(&mut taken, key, now));
+        assert!(taken.is_empty(), "the old entry is forgotten");
+        taken.insert(key, now - Duration::from_secs(1));
+        assert!(taken_lately(&mut taken, key, now));
+    }
+
+    #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn a_hand_off_tried_again_is_queued_once() {
+        #[cfg(not(target_os = "macos"))]
+        let name = || {
+            format!("waveflow-quickplay-retry-{}.sock", std::process::id())
+                .to_ns_name::<GenericNamespaced>()
+                .unwrap()
+        };
+        // macOS has no abstract namespace: a socket file, in a directory
+        // made for this run with mode 0700. Creating it fails if anything
+        // is already there, so it is never someone else's, even when the
+        // temporary directory is the shared /tmp.
+        #[cfg(target_os = "macos")]
+        let dir = {
+            use std::os::unix::fs::DirBuilderExt;
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            // Short: $TMPDIR is long on macOS and a socket path must fit
+            // in 104 bytes (sun_path). One too long to leave room for the
+            // ~40 bytes below gives way to /tmp, the directory still private.
+            let mut parent = std::env::temp_dir();
+            if parent.as_os_str().len() + 40 > 104 {
+                parent = PathBuf::from("/tmp");
+            }
+            let dir = parent.join(format!("qp-{}-{nanos}", std::process::id()));
+            std::fs::DirBuilder::new().mode(0o700).create(&dir).unwrap();
+            dir
+        };
+        #[cfg(target_os = "macos")]
+        let path = dir.join("s");
+        #[cfg(target_os = "macos")]
+        let name = || {
+            path.clone()
+                .into_os_string()
+                .to_fs_name::<GenericFilePath>()
+                .unwrap()
+        };
+        let listener = listen(name()).unwrap();
+        let (tx, rx) = crossbeam_channel::bounded(MAX_QUEUED);
+        std::thread::spawn(move || serve(listener, tx, CtxSlot::default(), false));
+        let hand = |paths: &[&str]| {
+            let paths: Vec<PathBuf> = paths.iter().map(PathBuf::from).collect();
+            let body = encode(Mode::Enqueue, &paths).unwrap();
+            let point = Endpoint {
+                name: name(),
+                path: None,
+                check_peer: false,
+            };
+            exchange(point, &body, &AtomicBool::new(false)).unwrap()
+        };
+        // The same process sending the same files again: a retry.
+        assert!(hand(&["/music/a.flac"]));
+        assert!(hand(&["/music/a.flac"]), "a retry is answered");
+        assert!(hand(&["/music/b.flac"]));
+        // Paths are made absolute on the way, so only the names are compared.
+        let got: Vec<Vec<_>> = rx
+            .try_iter()
+            .map(|m| {
+                m.paths
+                    .iter()
+                    .map(|p| p.file_name().unwrap().to_owned())
+                    .collect()
+            })
+            .collect();
+        assert_eq!(got, [["a.flac"], ["b.flac"]]);
+        #[cfg(target_os = "macos")]
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
