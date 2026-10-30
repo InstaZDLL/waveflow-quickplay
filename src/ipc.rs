@@ -464,6 +464,14 @@ const REMEMBER_TAKEN: Duration = Duration::from_secs(60);
 /// with the same files are two processes, so both are queued.
 type Taken = Arc<Mutex<HashMap<(i64, u64), Instant>>>;
 
+/// Whether `key` was taken less than [`REMEMBER_TAKEN`] before `now`. Older
+/// entries are forgotten first, so a process id the system has reused, with
+/// the same files, is not mistaken for a retry.
+fn taken_lately(taken: &mut HashMap<(i64, u64), Instant>, key: (i64, u64), now: Instant) -> bool {
+    taken.retain(|_, at| now.saturating_duration_since(*at) < REMEMBER_TAKEN);
+    taken.contains_key(&key)
+}
+
 fn digest(message: &Message) -> u64 {
     let mut hasher = DefaultHasher::new();
     message.mode.hash(&mut hasher);
@@ -495,7 +503,7 @@ fn handle(conn: Stream, tx: &Sender<Message>, ctx: &CtxSlot, taken: &Taken) {
     let key = peer.map(|pid| (pid, digest(&message)));
     {
         let mut taken = taken.lock().unwrap_or_else(PoisonError::into_inner);
-        if key.is_some_and(|key| taken.contains_key(&key)) {
+        if key.is_some_and(|key| taken_lately(&mut taken, key, Instant::now())) {
             tracing::info!("ipc: a hand-off tried again, already taken");
         } else {
             tracing::info!(mode = ?message.mode, paths = message.paths.len(), "ipc: files received");
@@ -508,7 +516,6 @@ fn handle(conn: Stream, tx: &Sender<Message>, ctx: &CtxSlot, taken: &Taken) {
                 Err(TrySendError::Disconnected(_)) => return,
             }
             if let Some(key) = key {
-                taken.retain(|_, at| at.elapsed() < REMEMBER_TAKEN);
                 taken.insert(key, Instant::now());
             }
             if let Ok(slot) = ctx.lock() {
@@ -681,6 +688,20 @@ mod tests {
         let _first = listen(name()).unwrap();
         let err = listen(name()).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::AddrInUse);
+    }
+
+    #[test]
+    fn a_hand_off_taken_long_ago_is_not_a_retry() {
+        let key = (4242, 7);
+        let now = Instant::now();
+        let mut taken = HashMap::new();
+        // The same process id and files, seen more than a minute ago: the
+        // id was reused by a new launch, whose files must be queued.
+        taken.insert(key, now - REMEMBER_TAKEN - Duration::from_secs(1));
+        assert!(!taken_lately(&mut taken, key, now));
+        assert!(taken.is_empty(), "the old entry is forgotten");
+        taken.insert(key, now - Duration::from_secs(1));
+        assert!(taken_lately(&mut taken, key, now));
     }
 
     #[cfg(any(windows, target_os = "linux"))]
