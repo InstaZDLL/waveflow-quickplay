@@ -22,10 +22,12 @@
 //! never finishes cannot hold up the launches after it, and a server that
 //! never answers cannot hang one.
 
+use std::collections::HashMap;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender, TrySendError};
@@ -33,7 +35,7 @@ use interprocess::local_socket::{
     prelude::*, GenericFilePath, GenericNamespaced, ListenerOptions, Name, Stream,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Mode {
     /// Replace the queue with these files and play them.
     Play,
@@ -296,9 +298,16 @@ impl Server {
             Err(e) if e.kind() == io::ErrorKind::AddrInUse && socket_path.is_some() => {
                 // Either a file left by a crashed instance, or an instance
                 // that came up between our connect attempt and now. Only a
-                // socket nobody answers is stale; a live one is handed to.
-                if Stream::connect(point.name.clone()).is_ok() {
-                    return Err(e);
+                // socket that refuses the connection is stale; one that
+                // answers, is too busy to, or fails some other way is left
+                // alone and reported as taken, so the caller tries again.
+                match answers(point.name.clone()) {
+                    Ok(false) => {}
+                    Ok(true) => return Err(e),
+                    Err(probe) => {
+                        tracing::warn!(error = %probe, "ipc: socket file neither live nor stale");
+                        return Err(e);
+                    }
                 }
                 let path = socket_path.as_deref().expect("checked");
                 std::fs::remove_file(path)?;
@@ -343,6 +352,31 @@ impl Drop for Server {
     }
 }
 
+/// Whether something listens on `name`, within [`CLIENT_TIMEOUT`]: `true`
+/// when it accepts or keeps the connect waiting (a busy listener), `false`
+/// when the connection is refused or the socket is gone (a stale file).
+/// Any other error is the caller's to judge.
+fn answers(name: Name<'static>) -> io::Result<bool> {
+    let (tx, rx) = crossbeam_channel::bounded(1);
+    std::thread::Builder::new()
+        .name("quickplay-ipc-probe".into())
+        .spawn(move || {
+            let _ = tx.send(Stream::connect(name).map(drop));
+        })?;
+    match rx.recv_timeout(CLIENT_TIMEOUT) {
+        Ok(Ok(())) | Err(_) => Ok(true),
+        Ok(Err(e))
+            if matches!(
+                e.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
+            ) =>
+        {
+            Ok(false)
+        }
+        Ok(Err(e)) => Err(e),
+    }
+}
+
 /// Creates the listener. A pipe whose name is taken fails on Windows with
 /// "access denied" (the first instance is created exclusive), reported here
 /// as `AddrInUse` like a Unix socket, so a launch that loses the start race
@@ -367,6 +401,7 @@ fn serve(
     check_peer: bool,
 ) {
     let active = Arc::new(AtomicUsize::new(0));
+    let taken = Taken::default();
     for conn in listener.incoming() {
         let conn = match conn {
             Ok(c) => c,
@@ -387,14 +422,14 @@ fn serve(
             std::thread::sleep(Duration::from_millis(5));
         }
         let slot = Slot::take(&active);
-        let (tx, ctx) = (tx.clone(), ctx.clone());
+        let (tx, ctx, taken) = (tx.clone(), ctx.clone(), taken.clone());
         // The slot goes back when the closure is dropped: after `handle`,
         // when it panics, or when no thread could be spawned for it.
         let spawned = std::thread::Builder::new()
             .name("quickplay-ipc-client".into())
             .spawn(move || {
                 let _slot = slot;
-                handle(conn, &tx, &ctx);
+                handle(conn, &tx, &ctx, &taken);
             });
         if let Err(e) = spawned {
             tracing::warn!(error = %e, "ipc: no thread for a connection");
@@ -418,7 +453,28 @@ impl Drop for Slot {
     }
 }
 
-fn handle(conn: Stream, tx: &Sender<Message>, ctx: &CtxSlot) {
+/// How long a hand-off taken is remembered: longer than a launch keeps
+/// trying (`HAND_OFF_DEADLINE` in main.rs).
+const REMEMBER_TAKEN: Duration = Duration::from_secs(60);
+
+/// Hand-offs taken lately, by the process that sent them and what they
+/// carried. A launch whose message was queued but whose `ok` never reached
+/// it (a timeout, a pipe broken after the write) tries again: that second
+/// try is answered without its files being queued twice. Two launches
+/// with the same files are two processes, so both are queued.
+type Taken = Arc<Mutex<HashMap<(i64, u64), Instant>>>;
+
+fn digest(message: &Message) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    message.mode.hash(&mut hasher);
+    message.paths.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn handle(conn: Stream, tx: &Sender<Message>, ctx: &CtxSlot, taken: &Taken) {
+    // Where the platform says (a pipe's client process, a socket's peer on
+    // Linux); without it a try is never recognised as a repeat.
+    let peer = conn.peer_creds().ok().and_then(|c| c.pid()).map(i64::from);
     // One deadline for the whole message: named pipes have no read
     // timeout, and a per-read timeout on a Unix socket lets a client that
     // sends a byte now and then hold its slot forever. Unix sockets are
@@ -436,18 +492,30 @@ fn handle(conn: Stream, tx: &Sender<Message>, ctx: &CtxSlot) {
     let Some(message) = read_message(&mut reader) else {
         return;
     };
-    tracing::info!(mode = ?message.mode, paths = message.paths.len(), "ipc: files received");
-    match tx.try_send(message) {
-        Ok(()) => {}
-        Err(TrySendError::Full(_)) => {
-            tracing::warn!("ipc: the player is not taking messages, one refused");
-            return;
-        }
-        Err(TrySendError::Disconnected(_)) => return,
-    }
-    if let Ok(slot) = ctx.lock() {
-        if let Some(ctx) = slot.as_ref() {
-            ctx.request_repaint();
+    let key = peer.map(|pid| (pid, digest(&message)));
+    {
+        let mut taken = taken.lock().unwrap_or_else(PoisonError::into_inner);
+        if key.is_some_and(|key| taken.contains_key(&key)) {
+            tracing::info!("ipc: a hand-off tried again, already taken");
+        } else {
+            tracing::info!(mode = ?message.mode, paths = message.paths.len(), "ipc: files received");
+            match tx.try_send(message) {
+                Ok(()) => {}
+                Err(TrySendError::Full(_)) => {
+                    tracing::warn!("ipc: the player is not taking messages, one refused");
+                    return;
+                }
+                Err(TrySendError::Disconnected(_)) => return,
+            }
+            if let Some(key) = key {
+                taken.retain(|_, at| at.elapsed() < REMEMBER_TAKEN);
+                taken.insert(key, Instant::now());
+            }
+            if let Ok(slot) = ctx.lock() {
+                if let Some(ctx) = slot.as_ref() {
+                    ctx.request_repaint();
+                }
+            }
         }
     }
     let conn = &mut reader.get_mut().inner;
@@ -613,6 +681,44 @@ mod tests {
         let _first = listen(name()).unwrap();
         let err = listen(name()).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::AddrInUse);
+    }
+
+    #[cfg(any(windows, target_os = "linux"))]
+    #[test]
+    fn a_hand_off_tried_again_is_queued_once() {
+        let name = || {
+            format!("waveflow-quickplay-retry-{}.sock", std::process::id())
+                .to_ns_name::<GenericNamespaced>()
+                .unwrap()
+        };
+        let listener = listen(name()).unwrap();
+        let (tx, rx) = crossbeam_channel::bounded(MAX_QUEUED);
+        std::thread::spawn(move || serve(listener, tx, CtxSlot::default(), false));
+        let hand = |paths: &[&str]| {
+            let paths: Vec<PathBuf> = paths.iter().map(PathBuf::from).collect();
+            let body = encode(Mode::Enqueue, &paths).unwrap();
+            let point = Endpoint {
+                name: name(),
+                path: None,
+                check_peer: false,
+            };
+            exchange(point, &body, &AtomicBool::new(false)).unwrap()
+        };
+        // The same process sending the same files again: a retry.
+        assert!(hand(&["/music/a.flac"]));
+        assert!(hand(&["/music/a.flac"]), "a retry is answered");
+        assert!(hand(&["/music/b.flac"]));
+        // Paths are made absolute on the way, so only the names are compared.
+        let got: Vec<Vec<_>> = rx
+            .try_iter()
+            .map(|m| {
+                m.paths
+                    .iter()
+                    .map(|p| p.file_name().unwrap().to_owned())
+                    .collect()
+            })
+            .collect();
+        assert_eq!(got, [["a.flac"], ["b.flac"]]);
     }
 
     #[test]
