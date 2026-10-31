@@ -290,6 +290,9 @@ The working set is dominated by the OpenGL driver and the decoded cover
 
 ## Known limitations
 
+- **A hand-over to an open QuickPlay** carries at most 10 000 files, in a
+  message of at most 4 MiB (the paths with their line breaks and the
+  command). A larger selection opens in a window of its own.
 - **macOS** ships as an app in a disk image, signed ad hoc rather than by
   an Apple Developer ID, so Gatekeeper blocks the first launch of each
   downloaded version until it is allowed in System Settings › Privacy &
