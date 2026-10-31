@@ -100,7 +100,7 @@ They are complementary, not two sizes of the same thing: QuickPlay deliberately 
 ### 🎧 Playback
 
 - **Every format WaveFlow plays**: MP3, FLAC, WAV, AIFF, Vorbis, Opus, AAC, ALAC, DSF and DFF, with the desktop app's own decoders.
-- **Files and folders** from the command line, a drop on either window or the open dialog; folders are walked four levels deep without blocking the window.
+- **Files, folders and playlists** from the command line, a drop on either window or the open dialog; folders are walked four levels deep without blocking the window. An `.m3u` or `.m3u8` playlist queues its files in its own order, whether it gives them as absolute paths, paths relative to it or `file://` URLs, and whatever code page wrote it; web addresses and files that are not there are left out.
 - **Instant pause, clean seeks**, no clicks or pops: the audio thread never waits on the interface.
 - **Auto-advance** with the track's tail played out; broken files are skipped and flagged in the playlist.
 - **Spectrum** timed to the output clock, so the bars follow what you hear.
@@ -129,7 +129,7 @@ They are complementary, not two sizes of the same thing: QuickPlay deliberately 
 ### 🖱️ From the file manager
 
 - **One instance**: a second launch hands its files to the open player and exits. Plain launch replaces the queue and plays, `--enqueue` appends; Explorer's "Play with" / "Add to playlist" hand a whole multi-selection to one process.
-- `--register` adds *Play with QuickPlay* and *Add to QuickPlay playlist* to the context menu of every audio extension and of folders, plus an "Open with" entry, for the current user and without administrator rights. On Linux it writes a `.desktop` entry with the audio MIME types. `--unregister` removes it all.
+- `--register` adds *Play with QuickPlay* and *Add to QuickPlay playlist* to the context menu of every audio extension, of `.m3u` / `.m3u8` playlists and of folders, plus an "Open with" entry, for the current user and without administrator rights. On Linux it writes a `.desktop` entry with the audio and M3U MIME types. `--unregister` removes it all.
 - The default handler for the extensions is left to you (Settings › Default apps, or `xdg-mime default app.waveflow.quickplay.desktop audio/flac`).
 - **macOS**: the app declares the audio formats it plays, so once it is in Applications Finder lists it under *Open With* for them, a multi-selection included. To make it the default player for a format, select a file, *Get Info › Open with › WaveFlow QuickPlay › Change All*. Finder has no per-app menu entries, so there is no *Add to playlist* there.
 

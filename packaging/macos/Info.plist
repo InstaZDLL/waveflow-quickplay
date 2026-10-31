@@ -37,6 +37,19 @@
 				<string>dff</string>
 			</array>
 		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Playlist</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>m3u</string>
+				<string>m3u8</string>
+			</array>
+		</dict>
 	</array>
 	<key>CFBundleDisplayName</key>
 	<string>WaveFlow QuickPlay</string>

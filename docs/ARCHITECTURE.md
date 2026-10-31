@@ -241,7 +241,8 @@ only used when this user owns it and nobody else can enter it.
 
 `--register` writes, for the current user only, the context-menu verbs and
 an "Open with" entry on Windows (`HKCU\Software\Classes`), or a `.desktop`
-entry with the audio MIME types and an "Add to playlist" action on Linux.
+entry with the audio and M3U MIME types and an "Add to playlist" action on
+Linux.
 On Windows the two verbs are `DropTarget` verbs, not command lines: a
 command-line verb starts one process per selected file, a thousand for a
 thousand files. Each verb names a COM class (`CLSID\{…}\LocalServer32`,
