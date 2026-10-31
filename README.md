@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.2.0-10b981?style=flat-square" alt="Version 1.2.0" />
+  <img src="https://img.shields.io/badge/version-1.3.0-10b981?style=flat-square" alt="Version 1.3.0" />
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey?style=flat-square" alt="Windows, Linux and macOS" />
   <img src="https://img.shields.io/badge/opens%20in-%3C%20300%20ms-10b981?style=flat-square" alt="Opens in under 300 ms" />
   <img src="https://img.shields.io/badge/license-GPL--3.0--only-green?style=flat-square" alt="GPL-3.0-only" />
@@ -104,6 +104,7 @@ They are complementary, not two sizes of the same thing: QuickPlay deliberately 
 - **Instant pause, clean seeks**, no clicks or pops: the audio thread never waits on the interface.
 - **Auto-advance** with the track's tail played out; broken files are skipped and flagged in the playlist.
 - **Spectrum** timed to the output clock, so the bars follow what you hear.
+- **Live bitrate**: the format chip shows the bitrate of what is playing, measured each second from the packets being decoded rather than the whole file's average, so a FLAC that opens quietly reads low there and its real rate once the music starts. DSD shows its constant rate.
 - **Continue in WaveFlow**: when WaveFlow Desktop 2.0.0-beta.1 or later is installed, the button with its logo hands the queue, the track, the position and the play or pause state over to it, and QuickPlay closes. WaveFlow picks up at the same spot, from its library when the files are in it.
 
 ### 🖼️ Two sizes, one window

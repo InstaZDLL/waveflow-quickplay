@@ -16,7 +16,7 @@ body:
     attributes:
       label: QuickPlay version
       description: From the settings page (gear in the title bar) or `waveflow-quickplay --version`.
-      placeholder: "1.2.0"
+      placeholder: "1.3.0"
     validations:
       required: true
 
@@ -84,7 +84,7 @@ body:
       label: Steps to reproduce
       description: Numbered steps a stranger could follow on a fresh install.
       placeholder: |
-        1. Install QuickPlay 1.2.0 with the Windows installer.
+        1. Install QuickPlay 1.3.0 with the Windows installer.
         2. Right-click a 24-bit FLAC → "Play with QuickPlay".
         3. Observe the status line.
     validations:
