@@ -106,7 +106,12 @@ fn endpoint() -> io::Result<Endpoint> {
         let dir = private_dir
             .or_else(dirs::cache_dir)
             .unwrap_or_else(std::env::temp_dir);
-        let path = dir.join(base);
+        let path = socket_path(&dir, &base).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{} is too long for a socket path", dir.display()),
+            )
+        })?;
         let name = path
             .clone()
             .into_os_string()
@@ -117,6 +122,54 @@ fn endpoint() -> io::Result<Endpoint> {
             check_peer: false,
         })
     }
+}
+
+/// Bytes `sun_path` holds, its closing NUL included.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const SUN_PATH: usize = 108;
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+const SUN_PATH: usize = 104;
+
+/// The socket file's name when the usual one does not fit: the directory
+/// is this user's already.
+const SHORT_NAME: &str = "wfqp.sock";
+
+/// Where the socket file goes. A socket path must fit in `sun_path`, and
+/// a `$TMPDIR` set by hand or a long user name can make the usual one too
+/// long; neither end could then make the socket, and every launch would
+/// open a window of its own. So: the usual name in `dir` (what earlier
+/// versions use, so they still find each other), else a short one there,
+/// else a short one in a directory of this user's in `/tmp`.
+fn socket_path(dir: &std::path::Path, base: &str) -> Option<PathBuf> {
+    let fits = |path: &PathBuf| path.as_os_str().len() < SUN_PATH;
+    [dir.join(base), dir.join(SHORT_NAME)]
+        .into_iter()
+        .find(fits)
+        .or_else(|| Some(short_private_dir()?.join(SHORT_NAME)).filter(fits))
+}
+
+/// `/tmp/wfqp-<uid>`, made with mode 0700 if it is not there. Anyone can
+/// create names in `/tmp`, so only a real directory (not a link) owned by
+/// this user and closed to everyone else will do; one squatted by another
+/// user is refused.
+#[cfg(unix)]
+fn short_private_dir() -> Option<PathBuf> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+    // SAFETY: geteuid has no preconditions and cannot fail.
+    let euid = unsafe { libc::geteuid() };
+    let dir = PathBuf::from(format!("/tmp/wfqp-{euid}"));
+    match std::fs::DirBuilder::new().mode(0o700).create(&dir) {
+        Ok(()) => {}
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(_) => return None,
+    }
+    let meta = std::fs::symlink_metadata(&dir).ok()?;
+    (meta.is_dir() && meta.uid() == euid && meta.mode() & 0o077 == 0).then_some(dir)
+}
+
+#[cfg(not(unix))]
+fn short_private_dir() -> Option<PathBuf> {
+    None
 }
 
 /// A directory only this user can enter: `$XDG_RUNTIME_DIR` (mode 0700 by
@@ -702,6 +755,30 @@ mod tests {
         });
         assert!(reader.join().is_err());
         assert_eq!(active.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn a_socket_path_too_long_gets_a_short_name() {
+        let base = "waveflow-quickplay-someone.sock";
+        let short = PathBuf::from("/run/user/1000");
+        assert_eq!(socket_path(&short, base), Some(short.join(base)));
+        // Room for the short name only.
+        let mid = PathBuf::from(format!("/{}", "d".repeat(SUN_PATH - 20)));
+        assert_eq!(socket_path(&mid, base), Some(mid.join(SHORT_NAME)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_too_long_gives_way_to_one_in_tmp() {
+        let long = PathBuf::from(format!("/{}", "d".repeat(SUN_PATH)));
+        let path = socket_path(&long, "waveflow-quickplay-someone.sock").unwrap();
+        // SAFETY: geteuid has no preconditions and cannot fail.
+        let euid = unsafe { libc::geteuid() };
+        assert_eq!(
+            path,
+            PathBuf::from(format!("/tmp/wfqp-{euid}")).join(SHORT_NAME)
+        );
+        assert!(is_private(path.parent().unwrap()));
     }
 
     #[cfg(any(windows, target_os = "linux"))]

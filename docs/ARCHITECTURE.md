@@ -194,6 +194,11 @@ A launch first tries to hand its files to a running instance over a local
 socket (`src/ipc.rs`): a named pipe on Windows, a socket file in the
 per-user runtime directory (`$XDG_RUNTIME_DIR`, `$TMPDIR` on macOS) on
 Unix, the Linux abstract namespace only when there is no such directory.
+A socket path must fit in `sun_path` (104 bytes on macOS, 108 on Linux):
+when the usual name does not (a `$TMPDIR` set by hand, a long user name)
+the file takes a short one, and when even that is too long it goes to
+`/tmp/wfqp-<uid>`, a directory made with mode 0700 and refused if it is
+not this user's, a link, or open to others.
 The protocol is a few UTF-8 lines (`play` or `enqueue`, one path per line,
 a blank line, `ok` back); messages are capped in size and count, and one
 that is cut short or over a cap gets no `ok`. A path that is not UTF-8 or
