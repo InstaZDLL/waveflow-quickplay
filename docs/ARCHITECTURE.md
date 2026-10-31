@@ -95,7 +95,9 @@ UI thread (egui)  ──AudioCmd (crossbeam)──►  decoder thread (std)  ─
   due when that second plays, as the spectrum frames are. The tags' figure,
   the whole file's average, shows until the first reading; a pause keeps
   the last one. A FLAC that opens on silence reads a few kbps there and its
-  real rate once the music starts.
+  real rate once the music starts. DSD is not counted: its rate is
+  constant, one bit per sample and channel, and the chip shows the one its
+  header gives (5 645 kbps for DSD64 stereo).
 - At the end of a track `decode_next` appends the resampler's tail, cut to
   the track's real length, along with its `Ok(true)`; the decoder thread
   pushes what it was handed before it acts on the end, so the last
