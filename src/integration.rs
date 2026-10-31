@@ -431,7 +431,7 @@ mod platform {
     use super::*;
 
     const DESKTOP_ID: &str = "app.waveflow.quickplay";
-    const MIME_TYPES: &str = "audio/flac;audio/mpeg;audio/mp4;audio/x-m4a;audio/aac;audio/x-aac;audio/ogg;audio/vorbis;audio/x-vorbis+ogg;audio/opus;audio/x-opus+ogg;audio/wav;audio/x-wav;audio/vnd.wave;audio/aiff;audio/x-aiff;audio/x-dsf;audio/x-dff;audio/x-dsd;audio/x-mpegurl;audio/mpegurl;";
+    const MIME_TYPES: &str = "audio/flac;audio/mpeg;audio/mp4;audio/x-m4a;audio/aac;audio/x-aac;audio/ogg;audio/vorbis;audio/x-vorbis+ogg;audio/opus;audio/x-opus+ogg;audio/wav;audio/x-wav;audio/vnd.wave;audio/aiff;audio/x-aiff;audio/x-dsf;audio/x-dff;audio/x-dsd;audio/x-mpegurl;audio/mpegurl;application/vnd.apple.mpegurl;";
 
     fn data_dir() -> io::Result<PathBuf> {
         dirs::data_dir().ok_or_else(|| io::Error::other("no XDG data directory"))

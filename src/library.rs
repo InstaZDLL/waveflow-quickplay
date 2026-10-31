@@ -138,15 +138,17 @@ enum Location {
     Local,
     /// A network share, `\\host\share\…` (Windows), by its host.
     Share(String),
-    /// A device or verbatim path (`\\.\…`, `\\?\…`), or anything not
-    /// clearly a drive or a share: nothing a playlist has reason to name.
+    /// A device path (`\\.\…`, `\\?\GLOBALROOT\…`), a verbatim share
+    /// (`\\?\UNC\…`), or anything not clearly a drive or a share: nothing a
+    /// playlist has reason to name.
     Device,
 }
 
 /// Fails closed: the path is made absolute first, the way Windows will
 /// resolve it (against the current directory, which may itself be a
 /// share), and only a drive or a `\\host\share` prefix is taken for what
-/// it says. Anything else, a bare `\\host` included, is a `Device`.
+/// it says. Anything else, a bare `\\host` or a verbatim share included,
+/// is a `Device`.
 #[cfg(windows)]
 fn location(path: &Path) -> Location {
     use std::path::{Component, Prefix};
@@ -155,9 +157,7 @@ fn location(path: &Path) -> Location {
     };
     match path.components().next() {
         Some(Component::Prefix(prefix)) => match prefix.kind() {
-            Prefix::UNC(host, share) | Prefix::VerbatimUNC(host, share)
-                if !host.is_empty() && !share.is_empty() =>
-            {
+            Prefix::UNC(host, share) if !host.is_empty() && !share.is_empty() => {
                 Location::Share(host.to_string_lossy().to_lowercase())
             }
             Prefix::Disk(_) | Prefix::VerbatimDisk(_) => Location::Local,
@@ -194,11 +194,19 @@ fn entry_path(written: &str, folder: &Path) -> Option<PathBuf> {
         Some(_) => return None,
         None => PathBuf::from(written),
     };
-    Some(if path.is_absolute() {
-        path
-    } else {
-        folder.join(path)
-    })
+    if path.is_absolute() {
+        return Some(path);
+    }
+    let joined = folder.join(path);
+    // A playlist written on Windows separates with `\`, a valid file name
+    // character elsewhere: the entry as written comes first.
+    if cfg!(not(windows)) && written.contains('\\') && !joined.is_file() {
+        let slashed = folder.join(written.replace('\\', "/"));
+        if slashed.is_file() {
+            return Some(slashed);
+        }
+    }
+    Some(joined)
 }
 
 /// The path of a `file://` URL, given what follows `file://`: a host
@@ -565,19 +573,19 @@ mod tests {
         assert_eq!(at(r"C:\Music\a.flac"), Location::Local);
         assert_eq!(at(r"\\NAS\music\a.flac"), Location::Share("nas".into()));
         assert_eq!(at("//nas/music/a.flac"), Location::Share("nas".into()));
-        assert_eq!(
-            at(r"\\?\UNC\nas\music\a.flac"),
-            Location::Share("nas".into())
-        );
+        assert_eq!(at(r"\\?\UNC\nas\music\a.flac"), Location::Device);
+        assert_eq!(at(r"\\?\C:\Music\a.flac"), Location::Local);
         assert_eq!(at(r"\\.\pipe\x"), Location::Device);
         assert_eq!(at(r"\\attacker"), Location::Device);
         assert_eq!(
             at(r"\/attacker/x/a.flac"),
             Location::Share("attacker".into())
         );
-        // Resolved against the current directory, a drive here.
-        assert_eq!(at("a.flac"), Location::Local);
-        assert_eq!(at(r"\a.flac"), Location::Local);
+        // Resolved against the current directory, a drive or a share.
+        let here = location(&std::env::current_dir().unwrap());
+        assert_ne!(here, Location::Device);
+        assert_eq!(at("a.flac"), here);
+        assert_eq!(at(r"\a.flac"), here);
         let local = Location::Local;
         let nas = at(r"\\nas\music\list.m3u");
         // From a playlist in Downloads: local files only.
@@ -600,7 +608,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("qp-m3u-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("sub")).unwrap();
-        for name in ["a.flac", "sub/b.mp3", "c d.ogg", "notes.txt"] {
+        for name in ["a.flac", "sub/b.mp3", "sub/e.wav", "c d.ogg", "notes.txt"] {
             std::fs::write(dir.join(name), b"").unwrap();
         }
         // The URL form a player writes: forward slashes, a space escaped.
@@ -611,22 +619,22 @@ mod tests {
             c.replace(' ', "%20")
         );
         let list = format!(
-            "\u{feff}#EXTM3U\n#EXTINF:12,Someone - B\nsub/b.mp3\n{c_url}\nhttps://radio.example/stream\nmissing.flac\nnotes.txt\n{}\n",
+            "\u{feff}#EXTM3U\n#EXTINF:12,Someone - B\nsub/b.mp3\nsub\\e.wav\n{c_url}\nhttps://radio.example/stream\nmissing.flac\nnotes.txt\n{}\n",
             dir.join("a.flac").display()
         );
         let m3u = dir.join("list.m3u8");
         std::fs::write(&m3u, list).unwrap();
-        // Relative, URL and absolute entries; the web address, the missing
-        // file and the text file are left out.
+        // Relative (either separator), URL and absolute entries; the web
+        // address, the missing file and the text file are left out.
         let got = collect_audio_paths(&[m3u]);
         let names: Vec<_> = got
             .iter()
             .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
             .collect();
-        assert_eq!(names, ["b.mp3", "c d.ogg", "a.flac"]);
+        assert_eq!(names, ["b.mp3", "e.wav", "c d.ogg", "a.flac"]);
         assert!(got.iter().all(|p| p.is_file()));
         // A folder's playlists are not read, or their files would come twice.
-        assert_eq!(collect_audio_paths(std::slice::from_ref(&dir)).len(), 3);
+        assert_eq!(collect_audio_paths(std::slice::from_ref(&dir)).len(), 4);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

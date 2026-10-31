@@ -13,7 +13,7 @@ Exec=waveflow-quickplay %F
 Icon=app.waveflow.quickplay
 Terminal=false
 Categories=AudioVideo;Audio;Player;
-MimeType=audio/flac;audio/mpeg;audio/mp4;audio/x-m4a;audio/aac;audio/x-aac;audio/ogg;audio/vorbis;audio/x-vorbis+ogg;audio/opus;audio/x-opus+ogg;audio/wav;audio/x-wav;audio/vnd.wave;audio/aiff;audio/x-aiff;audio/x-dsf;audio/x-dff;audio/x-dsd;audio/x-mpegurl;audio/mpegurl;
+MimeType=audio/flac;audio/mpeg;audio/mp4;audio/x-m4a;audio/aac;audio/x-aac;audio/ogg;audio/vorbis;audio/x-vorbis+ogg;audio/opus;audio/x-opus+ogg;audio/wav;audio/x-wav;audio/vnd.wave;audio/aiff;audio/x-aiff;audio/x-dsf;audio/x-dff;audio/x-dsd;audio/x-mpegurl;audio/mpegurl;application/vnd.apple.mpegurl;
 StartupWMClass=app.waveflow.quickplay
 Actions=Enqueue;
 
