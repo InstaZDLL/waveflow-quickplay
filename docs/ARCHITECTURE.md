@@ -89,6 +89,13 @@ UI thread (egui)  ──AudioCmd (crossbeam)──►  decoder thread (std)  ─
   identifiers of that call (track id, source) stay empty; the length comes
   from the container (`container_duration_ms`) and the codec name from the
   registry (`codec`), spelled as the desktop's format chip spells it.
+- The bitrate chip is measured while the track plays: the decoder sums
+  the compressed bytes and the frames of the packets it decodes
+  (`ActiveStream::packets_read`) and takes a reading per second of audio,
+  due when that second plays, as the spectrum frames are. The tags' figure,
+  the whole file's average, shows until the first reading; a pause keeps
+  the last one. A FLAC that opens on silence reads a few kbps there and its
+  real rate once the music starts.
 - At the end of a track `decode_next` appends the resampler's tail, cut to
   the track's real length, along with its `Ok(true)`; the decoder thread
   pushes what it was handed before it acts on the end, so the last

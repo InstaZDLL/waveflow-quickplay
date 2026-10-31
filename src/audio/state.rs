@@ -8,6 +8,7 @@
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::Mutex;
 
+use super::bitrate::BitrateQueue;
 use super::spectrum::SpectrumQueue;
 
 /// High-level player lifecycle, stored as an `AtomicU8`.
@@ -49,6 +50,9 @@ pub struct SharedPlayback {
     /// Analysed frames waiting for their play position. Decoder and UI
     /// threads only.
     pub spectrum: Mutex<SpectrumQueue>,
+    /// Bitrate readings waiting for their play position, as the spectrum
+    /// frames wait. Decoder and UI threads only.
+    pub bitrate: Mutex<BitrateQueue>,
     /// Buffer underruns and overruns the backend reported. The error
     /// callback only counts them (on ALSA it runs on the stream's own
     /// thread, where nothing may block); the UI thread logs the count.
@@ -69,6 +73,7 @@ impl SharedPlayback {
             samples_pushed: AtomicU64::new(0),
             spectrum_enabled: AtomicBool::new(true),
             spectrum: Mutex::new(SpectrumQueue::default()),
+            bitrate: Mutex::new(BitrateQueue::default()),
             xruns: AtomicU64::new(0),
         }
     }
@@ -118,6 +123,10 @@ impl SharedPlayback {
         self.samples_played.store(0, Ordering::Release);
         self.samples_pushed.store(0, Ordering::Release);
         self.clear_spectrum();
+        self.bitrate
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
     }
 
     pub fn clear_spectrum(&self) {
@@ -131,6 +140,15 @@ impl SharedPlayback {
     pub fn take_due_spectrum(&self) -> Option<[f32; super::spectrum::BAND_COUNT]> {
         let played = self.samples_played.load(Ordering::Acquire);
         self.spectrum
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take_due(played)
+    }
+
+    /// The bitrate reading due at the current output position, if any.
+    pub fn take_due_bitrate(&self) -> Option<u32> {
+        let played = self.samples_played.load(Ordering::Acquire);
+        self.bitrate
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .take_due(played)
