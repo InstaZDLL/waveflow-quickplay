@@ -10,7 +10,7 @@ use lofty::picture::PictureType;
 use lofty::prelude::*;
 use lofty::tag::ItemKey;
 use waveflow_core::audio_format::dsd::metadata::read_metadata as read_dsd_metadata;
-use waveflow_core::audio_format::dsd::parser::{parse_dff, parse_dsf, DsdContainer};
+use waveflow_core::audio_format::dsd::parser::{parse_dff, parse_dsf, DsdContainer, DsdLayout};
 use waveflow_core::scanner::extract::{
     file_type_label, is_scannable_audio, probe_playable_stream, read_tagged_file, AUDIO_EXTENSIONS,
 };
@@ -161,8 +161,15 @@ fn read_dsd_meta(path: &Path, ext: &str) -> TrackMeta {
             .or_else(|| Some("DSD".into())),
         sample_rate: layout.as_ref().map(|l| l.sample_rate_hz),
         bit_depth: Some(1),
-        bitrate_kbps: None,
+        bitrate_kbps: layout.as_ref().map(dsd_bitrate_kbps),
     }
+}
+
+/// A DSD stream's bitrate: one bit per sample and channel, at a constant
+/// rate (DSD64 stereo is 5 645 kbps), so the header says it exactly.
+fn dsd_bitrate_kbps(layout: &DsdLayout) -> u32 {
+    let bits = u64::from(layout.sample_rate_hz) * u64::from(layout.channels.count());
+    u32::try_from((bits + 500) / 1000).unwrap_or(u32::MAX)
 }
 
 /// The embedded front cover, else any embedded picture, else a cover image
@@ -345,5 +352,40 @@ impl Loader {
 
     pub fn poll(&self) -> Vec<LoaderEvent> {
         self.rx.try_iter().collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::dsd_bitrate_kbps;
+    use waveflow_core::audio_format::dsd::parser::{DsdChannels, DsdContainer, DsdLayout};
+
+    fn layout(sample_rate_hz: u32, channels: DsdChannels) -> DsdLayout {
+        DsdLayout {
+            container: DsdContainer::Dsf,
+            channels,
+            sample_rate_hz,
+            samples_per_channel: 0,
+            data_offset: 0,
+            data_len_bytes: 0,
+            block_interleave: None,
+            lsb_first: false,
+        }
+    }
+
+    #[test]
+    fn a_dsd_bitrate_is_one_bit_per_sample_and_channel() {
+        assert_eq!(
+            dsd_bitrate_kbps(&layout(2_822_400, DsdChannels::Stereo)),
+            5_645
+        );
+        assert_eq!(
+            dsd_bitrate_kbps(&layout(5_644_800, DsdChannels::Stereo)),
+            11_290
+        );
+        assert_eq!(
+            dsd_bitrate_kbps(&layout(2_822_400, DsdChannels::Multi(6))),
+            16_934
+        );
     }
 }

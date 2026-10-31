@@ -94,16 +94,22 @@ pub fn relaunch(resume: &Resume) -> io::Result<()> {
 /// the window or its OpenGL context failed): start again on Wayland, where
 /// the pin does nothing but the player works, with what this process was
 /// given, the state of a restart (`resume`) or the files of a launch.
+/// `resume_lost`: this was a restart whose state could not be read, which
+/// the new copy says too.
 /// Without this the queue of a restart would be lost, the previous process
 /// having closed already.
 pub fn relaunch_on_wayland(
     resume: Option<&Resume>,
+    resume_lost: bool,
     files: &[PathBuf],
     enqueue: bool,
 ) -> io::Result<()> {
     let Some(resume) = resume else {
         let mut command = after_exit_command()?;
         command.arg("--no-xwayland");
+        if resume_lost {
+            command.arg("--restart-state-lost");
+        }
         if enqueue {
             command.arg("--enqueue");
         }

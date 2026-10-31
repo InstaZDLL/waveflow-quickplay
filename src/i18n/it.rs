@@ -54,6 +54,7 @@ pub const STRINGS: Strings = Strings {
     status_pin_needs_xwayland:
         "Sempre in primo piano richiede XWayland, assente in questa sessione",
     status_cannot_restart: "Impossibile riavviare QuickPlay: {e}",
+    status_restart_state_lost: "Playlist persa durante il riavvio",
     status_update_ready: "QuickPlay {v} verrà installato alla chiusura",
     status_update_available: "QuickPlay {v} è disponibile",
     tip_open_in_waveflow: "Continua in WaveFlow",

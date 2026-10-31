@@ -87,6 +87,10 @@ struct Args {
     /// which this one waits out.
     restart_state: Option<PathBuf>,
     after_pid: Option<u32>,
+    /// Internal: a restart whose state was lost, started again on Wayland
+    /// after XWayland could not make the window; it says so as the first
+    /// one would have.
+    restart_state_lost: bool,
     /// Internal: XWayland failed to make the window, stay on Wayland.
     no_xwayland: bool,
     /// Started by COM for an Explorer verb (`-Embedding`): the files come
@@ -113,6 +117,7 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> Args {
             Some("--after-pid") => {
                 parsed.after_pid = args.next().and_then(|p| p.to_str()?.parse().ok());
             }
+            Some("--restart-state-lost") => parsed.restart_state_lost = true,
             Some("--no-xwayland") => parsed.no_xwayland = true,
             #[cfg(windows)]
             Some("-Embedding" | "/Embedding") => parsed.embedding = true,
@@ -205,6 +210,9 @@ fn main() -> eframe::Result {
         restart::wait_for_exit(pid);
     }
     let resume = args.restart_state.as_deref().and_then(restart::take_state);
+    // Started as a restart, yet where the player was is gone: it still
+    // opens, empty, and says so rather than look as if nothing was playing.
+    let resume_lost = args.restart_state_lost || (args.restart_state.is_some() && resume.is_none());
 
     // A restart is the running player itself: it takes the socket over from
     // the previous process, waiting for it to let go if it is slow to exit.
@@ -244,14 +252,14 @@ fn main() -> eframe::Result {
         options,
         Box::new(move |cc| {
             app_created.set(true);
-            let app = QuickPlayApp::new(cc, settings, files, server, resume, xwayland);
+            let app = QuickPlayApp::new(cc, settings, files, server, resume, resume_lost, xwayland);
             tracing::info!(elapsed_ms = started.elapsed().as_millis(), "window ready");
             Ok(Box::new(app))
         }),
     );
     if let (Err(e), Some((resume, files)), false) = (&result, fallback, created.get()) {
         tracing::warn!(error = %e, "no window under XWayland, starting again on Wayland");
-        match restart::relaunch_on_wayland(resume.as_ref(), &files, args.enqueue) {
+        match restart::relaunch_on_wayland(resume.as_ref(), resume_lost, &files, args.enqueue) {
             Ok(()) => return Ok(()),
             Err(e) => tracing::error!(error = %e, "starting again on Wayland failed"),
         }
@@ -404,6 +412,7 @@ mod tests {
             "--restart-state",
             "/run/user/1000/state.json",
             "--no-xwayland",
+            "--restart-state-lost",
             "a.flac",
             "b.flac",
         ]);
@@ -413,6 +422,7 @@ mod tests {
             Some(PathBuf::from("/run/user/1000/state.json"))
         );
         assert!(a.no_xwayland);
+        assert!(a.restart_state_lost);
         assert_eq!(a.files, [PathBuf::from("a.flac"), "b.flac".into()]);
         assert!(a.unknown.is_empty());
     }

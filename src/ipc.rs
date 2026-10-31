@@ -4,7 +4,9 @@
 //!
 //! Transport: one local socket per user. A socket file in a per-user,
 //! mode-0700 directory (`$XDG_RUNTIME_DIR`, or `$TMPDIR` on macOS) where
-//! there is one, so no other local user can reach or squat it; a named pipe
+//! there is one, so no other local user can reach or squat it; when that
+//! directory's path is too long for a socket, `/tmp/wfqp-<uid>`, made with
+//! mode 0700 and refused unless it is this user's alone; a named pipe
 //! on Windows, whose default DACL lets only the owner write; the Linux
 //! abstract namespace only as a last resort. Pipe and abstract names are
 //! machine-wide, so another user could create ours first: there both ends
@@ -93,30 +95,93 @@ fn endpoint() -> io::Result<Endpoint> {
     // host-wide and only used when there is none. On the other Unices
     // `GenericNamespaced` would mean a file in /tmp (interprocess's
     // deprecated `SpecialDirUdSocket`), which is host-wide too, so they
-    // always get a path.
+    // always get a path. A directory whose path leaves no room for a socket
+    // also falls back to the abstract namespace on Linux.
     let private_dir = private_runtime_dir();
     let abstract_ns = cfg!(any(target_os = "linux", target_os = "android"));
-    if cfg!(windows) || (private_dir.is_none() && abstract_ns) {
-        Ok(Endpoint {
-            name: base.to_ns_name::<GenericNamespaced>()?,
-            path: None,
-            check_peer: true,
-        })
+    let path = if cfg!(windows) || (private_dir.is_none() && abstract_ns) {
+        None
     } else {
         let dir = private_dir
             .or_else(dirs::cache_dir)
             .unwrap_or_else(std::env::temp_dir);
-        let path = dir.join(base);
-        let name = path
-            .clone()
-            .into_os_string()
-            .to_fs_name::<GenericFilePath>()?;
-        Ok(Endpoint {
-            name,
-            path: Some(path),
-            check_peer: false,
-        })
+        let path = socket_path(&dir, &base);
+        if path.is_none() && !abstract_ns {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{} is too long for a socket path", dir.display()),
+            ));
+        }
+        path
+    };
+    let Some(path) = path else {
+        return Ok(Endpoint {
+            name: base.to_ns_name::<GenericNamespaced>()?,
+            path: None,
+            check_peer: true,
+        });
+    };
+    let name = path
+        .clone()
+        .into_os_string()
+        .to_fs_name::<GenericFilePath>()?;
+    // The fallbacks (the cache directory, the temporary one) are not
+    // checked to be this user's alone: there whoever made the socket file
+    // could be someone else, so each end checks the other.
+    let check_peer = !path.parent().is_some_and(is_private);
+    Ok(Endpoint {
+        name,
+        path: Some(path),
+        check_peer,
+    })
+}
+
+/// Bytes `sun_path` holds, its closing NUL included.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const SUN_PATH: usize = 108;
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+const SUN_PATH: usize = 104;
+
+/// The socket file's name when the usual one does not fit: the directory
+/// is this user's already.
+const SHORT_NAME: &str = "wfqp.sock";
+
+/// Where the socket file goes. A socket path must fit in `sun_path`, and
+/// a `$TMPDIR` set by hand or a long user name can make the usual one too
+/// long; neither end could then make the socket, and every launch would
+/// open a window of its own. So: the usual name in `dir` (what earlier
+/// versions use, so they still find each other), else a short one there,
+/// else a short one in a directory of this user's in `/tmp`.
+fn socket_path(dir: &std::path::Path, base: &str) -> Option<PathBuf> {
+    let fits = |path: &PathBuf| path.as_os_str().len() < SUN_PATH;
+    [dir.join(base), dir.join(SHORT_NAME)]
+        .into_iter()
+        .find(fits)
+        .or_else(|| Some(short_private_dir()?.join(SHORT_NAME)).filter(fits))
+}
+
+/// `/tmp/wfqp-<uid>`, made with mode 0700 if it is not there. Anyone can
+/// create names in `/tmp`, so only a real directory (not a link) owned by
+/// this user and closed to everyone else will do; one squatted by another
+/// user is refused.
+#[cfg(unix)]
+fn short_private_dir() -> Option<PathBuf> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+    // SAFETY: geteuid has no preconditions and cannot fail.
+    let euid = unsafe { libc::geteuid() };
+    let dir = PathBuf::from(format!("/tmp/wfqp-{euid}"));
+    match std::fs::DirBuilder::new().mode(0o700).create(&dir) {
+        Ok(()) => {}
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(_) => return None,
     }
+    let meta = std::fs::symlink_metadata(&dir).ok()?;
+    (meta.is_dir() && meta.uid() == euid && meta.mode() & 0o077 == 0).then_some(dir)
+}
+
+#[cfg(not(unix))]
+fn short_private_dir() -> Option<PathBuf> {
+    None
 }
 
 /// A directory only this user can enter: `$XDG_RUNTIME_DIR` (mode 0700 by
@@ -702,6 +767,30 @@ mod tests {
         });
         assert!(reader.join().is_err());
         assert_eq!(active.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn a_socket_path_too_long_gets_a_short_name() {
+        let base = "waveflow-quickplay-someone.sock";
+        let short = PathBuf::from("/run/user/1000");
+        assert_eq!(socket_path(&short, base), Some(short.join(base)));
+        // Room for the short name only.
+        let mid = PathBuf::from(format!("/{}", "d".repeat(SUN_PATH - 20)));
+        assert_eq!(socket_path(&mid, base), Some(mid.join(SHORT_NAME)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_too_long_gives_way_to_one_in_tmp() {
+        let long = PathBuf::from(format!("/{}", "d".repeat(SUN_PATH)));
+        let path = socket_path(&long, "waveflow-quickplay-someone.sock").unwrap();
+        // SAFETY: geteuid has no preconditions and cannot fail.
+        let euid = unsafe { libc::geteuid() };
+        assert_eq!(
+            path,
+            PathBuf::from(format!("/tmp/wfqp-{euid}")).join(SHORT_NAME)
+        );
+        assert!(is_private(path.parent().unwrap()));
     }
 
     #[cfg(any(windows, target_os = "linux"))]
