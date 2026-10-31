@@ -27,6 +27,7 @@
 //! The contract the callback keeps is the desktop's: no allocation, no
 //! locks, no logging — it pops from the ring and touches atomics.
 
+pub mod bitrate;
 pub mod decoder;
 pub mod engine;
 pub mod output;

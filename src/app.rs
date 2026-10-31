@@ -76,6 +76,9 @@ pub struct QuickPlayApp {
     state: PlayerState,
     duration_ms: Option<u64>,
     codec: Option<String>,
+    /// The bitrate measured from the packets now playing; the tags'
+    /// average stands in until the first reading is due.
+    live_kbps: Option<u32>,
     seek_preview: Option<f32>,
 
     cover: Option<TextureHandle>,
@@ -193,6 +196,7 @@ impl QuickPlayApp {
             state: PlayerState::Idle,
             duration_ms: None,
             codec: None,
+            live_kbps: None,
             seek_preview: None,
             cover: None,
             cover_for: None,
@@ -597,6 +601,7 @@ impl QuickPlayApp {
         self.playing_id = Some(id);
         self.duration_ms = meta_duration;
         self.codec = None;
+        self.live_kbps = None;
         self.seek_preview = None;
         self.state = PlayerState::Loading;
         self.load_start_ms = start_ms;
@@ -739,6 +744,7 @@ impl QuickPlayApp {
     fn forget_track(&mut self) {
         self.duration_ms = None;
         self.codec = None;
+        self.live_kbps = None;
         self.lyrics = None;
         self.seek_preview = None;
         self.cover = None;
@@ -915,6 +921,16 @@ impl QuickPlayApp {
         collect_shortcuts(ctx, self.shortcut_snapshot(), &mut actions);
         for action in actions {
             self.apply(action);
+        }
+    }
+
+    /// Take the bitrate reading due at the output position. A pause keeps
+    /// the last one, as it keeps the position.
+    fn advance_bitrate(&mut self) {
+        if let (Some(engine), PlayerState::Playing) = (&self.engine, self.state) {
+            if let Some(kbps) = engine.shared().take_due_bitrate() {
+                self.live_kbps = Some(kbps);
+            }
         }
     }
 
@@ -1167,7 +1183,7 @@ impl QuickPlayApp {
             {
                 parts.push(codec);
             }
-            if let Some(kbps) = meta.and_then(|m| m.bitrate_kbps) {
+            if let Some(kbps) = self.live_kbps.or_else(|| meta.and_then(|m| m.bitrate_kbps)) {
                 parts.push(format!("{kbps} kbps"));
             }
             if let Some(rate) = meta.and_then(|m| m.sample_rate).filter(|r| *r > 0) {
@@ -1506,6 +1522,7 @@ impl eframe::App for QuickPlayApp {
         {
             self.status = None;
         }
+        self.advance_bitrate();
         let animating = self.advance_spectrum();
         self.schedule_lyric_repaint(ctx);
         if self.state == PlayerState::Playing {

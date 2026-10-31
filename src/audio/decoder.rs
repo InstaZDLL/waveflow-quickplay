@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use rtrb::Producer;
 
+use super::bitrate::BitrateMeter;
 use super::engine::{AudioCmd, EngineEvent};
 use super::output::RING_CAPACITY;
 use super::spectrum::SpectrumAnalyzer;
@@ -287,6 +288,7 @@ struct Session<'a> {
     /// The stream has ended; its tail is still playing out of the ring.
     eof: Option<Instant>,
     spectrum: SpectrumAnalyzer,
+    bitrate: BitrateMeter,
 }
 
 impl Session<'_> {
@@ -307,6 +309,24 @@ impl Session<'_> {
             .feed(&self.out[before..], channels, rate, ahead, &mut queue);
     }
 
+    /// Queue a bitrate reading once the packets decoded since the last one
+    /// hold a window of audio, due when the samples just decoded play:
+    /// everything pushed so far plus everything waiting in `out`.
+    fn read_bitrate(&mut self) {
+        let Some(kbps) = self
+            .bitrate
+            .read(self.stream.packets_read, self.stream.src_sample_rate)
+        else {
+            return;
+        };
+        let due = self.shared.samples_pushed.load(Ordering::Acquire) + self.out.len() as u64;
+        self.shared
+            .bitrate
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(due, kbps);
+    }
+
     /// Move the stream to `ms` and start it afresh there: decoder state
     /// and the resampler, which `reset_decoder` empties too, so nothing
     /// from the old position plays first and the count that cuts the tail
@@ -314,6 +334,7 @@ impl Session<'_> {
     fn seek_to(&mut self, ms: u64) {
         self.stream.seek_ms(ms);
         self.stream.reset_decoder();
+        self.bitrate.restart(self.stream.packets_read);
     }
 
     /// Apply one command. `Some(exit)` ends the track for the caller.
@@ -382,6 +403,7 @@ fn play_track(
     let dst_channels = shared.channels();
     let mut scratch: Vec<f32> = Vec::with_capacity(16_384);
     let mut logged_rate = false;
+    let bitrate = BitrateMeter::new(stream.packets_read);
     let mut session = Session {
         producer,
         shared,
@@ -390,6 +412,7 @@ fn play_track(
         out: Vec::with_capacity(16_384),
         eof: None,
         spectrum: SpectrumAnalyzer::new(),
+        bitrate,
     };
 
     loop {
@@ -452,6 +475,7 @@ fn play_track(
         {
             Ok(false) => {
                 session.feed_spectrum(before, dst_rate, dst_channels);
+                session.read_bitrate();
                 if !logged_rate && session.stream.src_sample_rate > 0 {
                     logged_rate = true;
                     tracing::debug!(
