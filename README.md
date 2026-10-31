@@ -100,7 +100,7 @@ They are complementary, not two sizes of the same thing: QuickPlay deliberately 
 ### 🎧 Playback
 
 - **Every format WaveFlow plays**: MP3, FLAC, WAV, AIFF, Vorbis, Opus, AAC, ALAC, DSF and DFF, with the desktop app's own decoders.
-- **Files, folders and playlists** from the command line, a drop on either window or the open dialog; folders are walked four levels deep without blocking the window. An `.m3u` or `.m3u8` playlist queues its files in its own order, whether it gives them as absolute paths, paths relative to it or `file://` URLs, and whatever code page wrote it; web addresses and files that are not there are left out.
+- **Files, folders and playlists** from the command line, a drop on either window or the open dialog; folders are walked four levels deep without blocking the window. An `.m3u` or `.m3u8` playlist queues its files in its own order, whether it gives them as absolute paths, paths relative to it or `file://` URLs, and whatever code page wrote it; web addresses and files that are not there are left out. A network share (`\\host\share`) is followed only from a playlist on that same host, since on Windows merely opening one hands it your login credentials; mapped drives always work.
 - **Instant pause, clean seeks**, no clicks or pops: the audio thread never waits on the interface.
 - **Auto-advance** with the track's tail played out; broken files are skipped and flagged in the playlist.
 - **Spectrum** timed to the output clock, so the bars follow what you hear.

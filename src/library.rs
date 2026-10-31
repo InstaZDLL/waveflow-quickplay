@@ -107,11 +107,19 @@ fn playlist_entries(path: &Path) -> Vec<PathBuf> {
     }
     let text = waveflow_core::text_encoding::decode(&raw);
     let folder = path.parent().unwrap_or_else(|| Path::new(""));
+    let home = location(path);
     let mut out = Vec::new();
     let mut skipped = 0usize;
     for entry in waveflow_core::playlist_import::m3u::parse(&text).entries {
         match entry_path(&entry.path, folder) {
-            Some(file) if file.is_file() && is_scannable_audio(&file) => out.push(file),
+            // Checked before the file is touched: see `may_follow`.
+            Some(file)
+                if may_follow(&location(&file), &home)
+                    && file.is_file()
+                    && is_scannable_audio(&file) =>
+            {
+                out.push(file)
+            }
             _ => skipped += 1,
         }
     }
@@ -119,6 +127,55 @@ fn playlist_entries(path: &Path) -> Vec<PathBuf> {
         tracing::debug!(path = %path.display(), skipped, "playlist entries skipped");
     }
     out
+}
+
+/// Where a path lives, as far as reaching it goes.
+#[derive(Debug, PartialEq, Eq)]
+// Only Windows tells shares and devices apart (`location`).
+#[cfg_attr(not(windows), allow(dead_code))]
+enum Location {
+    /// A drive of this machine, a mapped drive included.
+    Local,
+    /// A network share, `\\host\share\…` (Windows), by its host.
+    Share(String),
+    /// A device or verbatim path (`\\.\…`, `\\?\…`): nothing a playlist
+    /// has reason to name.
+    Device,
+}
+
+#[cfg(windows)]
+fn location(path: &Path) -> Location {
+    use std::path::{Component, Prefix};
+    match path.components().next() {
+        Some(Component::Prefix(prefix)) => match prefix.kind() {
+            Prefix::UNC(host, _) | Prefix::VerbatimUNC(host, _) => {
+                Location::Share(host.to_string_lossy().to_lowercase())
+            }
+            Prefix::Disk(_) | Prefix::VerbatimDisk(_) => Location::Local,
+            Prefix::Verbatim(_) | Prefix::DeviceNS(_) => Location::Device,
+        },
+        _ => Location::Local,
+    }
+}
+
+#[cfg(not(windows))]
+fn location(_path: &Path) -> Location {
+    Location::Local
+}
+
+/// Whether an entry at `entry` may be opened from a playlist at `home`.
+/// On Windows, merely opening `\\host\…` connects to that host and hands
+/// it this user's NTLM credentials, so a playlist downloaded from anywhere
+/// could leak them by naming a share of the sender's. A share is followed
+/// only from a playlist on the same host: an `.m3u` on the NAS listing the
+/// NAS's files works, one in Downloads naming a stranger's server does
+/// not. Mapped drives are local paths and always work.
+fn may_follow(entry: &Location, home: &Location) -> bool {
+    match entry {
+        Location::Local => true,
+        Location::Share(_) => entry == home,
+        Location::Device => false,
+    }
 }
 
 /// The file a playlist entry names, `None` for a web address.
@@ -487,8 +544,39 @@ impl Loader {
 #[cfg(test)]
 mod tests {
     use super::{collect_audio_paths, dsd_bitrate_kbps, entry_path, percent_decode};
+    #[cfg(windows)]
+    use super::{location, may_follow, Location};
     use std::path::{Path, PathBuf};
     use waveflow_core::audio_format::dsd::parser::{DsdChannels, DsdContainer, DsdLayout};
+
+    #[cfg(windows)]
+    #[test]
+    fn a_share_is_followed_only_from_a_playlist_on_it() {
+        let at = |p: &str| location(Path::new(p));
+        assert_eq!(at(r"C:\Music\a.flac"), Location::Local);
+        assert_eq!(at(r"\\NAS\music\a.flac"), Location::Share("nas".into()));
+        assert_eq!(at("//nas/music/a.flac"), Location::Share("nas".into()));
+        assert_eq!(
+            at(r"\\?\UNC\nas\music\a.flac"),
+            Location::Share("nas".into())
+        );
+        assert_eq!(at(r"\\.\pipe\x"), Location::Device);
+        let local = Location::Local;
+        let nas = at(r"\\nas\music\list.m3u");
+        // From a playlist in Downloads: local files only.
+        assert!(may_follow(&at(r"D:\a.flac"), &local));
+        assert!(!may_follow(&at(r"\\attacker\x\a.flac"), &local));
+        assert!(!may_follow(&at(r"\\.\pipe\x"), &local));
+        // From one on the NAS: its own files, no other host's.
+        assert!(may_follow(&at(r"\\nas\other\a.flac"), &nas));
+        assert!(!may_follow(&at(r"\\attacker\x\a.flac"), &nas));
+        // A share named through a file:// URL is the same share.
+        let url = entry_path(
+            "file://attacker/x/a.flac",
+            Path::new(r"C:\Users\me\Downloads"),
+        );
+        assert!(!may_follow(&location(&url.unwrap()), &local));
+    }
 
     #[test]
     fn a_playlist_gives_its_files_in_its_order() {
