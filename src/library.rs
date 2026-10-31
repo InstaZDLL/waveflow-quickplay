@@ -138,23 +138,32 @@ enum Location {
     Local,
     /// A network share, `\\host\share\…` (Windows), by its host.
     Share(String),
-    /// A device or verbatim path (`\\.\…`, `\\?\…`): nothing a playlist
-    /// has reason to name.
+    /// A device or verbatim path (`\\.\…`, `\\?\…`), or anything not
+    /// clearly a drive or a share: nothing a playlist has reason to name.
     Device,
 }
 
+/// Fails closed: the path is made absolute first, the way Windows will
+/// resolve it (against the current directory, which may itself be a
+/// share), and only a drive or a `\\host\share` prefix is taken for what
+/// it says. Anything else, a bare `\\host` included, is a `Device`.
 #[cfg(windows)]
 fn location(path: &Path) -> Location {
     use std::path::{Component, Prefix};
+    let Ok(path) = std::path::absolute(path) else {
+        return Location::Device;
+    };
     match path.components().next() {
         Some(Component::Prefix(prefix)) => match prefix.kind() {
-            Prefix::UNC(host, _) | Prefix::VerbatimUNC(host, _) => {
+            Prefix::UNC(host, share) | Prefix::VerbatimUNC(host, share)
+                if !host.is_empty() && !share.is_empty() =>
+            {
                 Location::Share(host.to_string_lossy().to_lowercase())
             }
             Prefix::Disk(_) | Prefix::VerbatimDisk(_) => Location::Local,
-            Prefix::Verbatim(_) | Prefix::DeviceNS(_) => Location::Device,
+            _ => Location::Device,
         },
-        _ => Location::Local,
+        _ => Location::Device,
     }
 }
 
@@ -561,6 +570,14 @@ mod tests {
             Location::Share("nas".into())
         );
         assert_eq!(at(r"\\.\pipe\x"), Location::Device);
+        assert_eq!(at(r"\\attacker"), Location::Device);
+        assert_eq!(
+            at(r"\/attacker/x/a.flac"),
+            Location::Share("attacker".into())
+        );
+        // Resolved against the current directory, a drive here.
+        assert_eq!(at("a.flac"), Location::Local);
+        assert_eq!(at(r"\a.flac"), Location::Local);
         let local = Location::Local;
         let nas = at(r"\\nas\music\list.m3u");
         // From a playlist in Downloads: local files only.
