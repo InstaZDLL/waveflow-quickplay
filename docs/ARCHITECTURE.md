@@ -162,8 +162,12 @@ the window still cannot be made under XWayland (the display answered, the
 window or its OpenGL context did not), the process starts a copy of
 itself on Wayland with `--no-xwayland` and the same state or files.
 A copy started with `--restart-state` that finds no state it can read
-(the file gone, or not one QuickPlay wrote) still opens, with an empty
-playlist, and says so in the status line.
+(the file gone, or not one QuickPlay wrote) goes through the
+single-instance check as a plain launch does. When it opens the window,
+empty, it says so in the status line, and so does the copy it starts on
+Wayland if XWayland fails (`--restart-state-lost`). When another
+QuickPlay answers on the socket instead, it exits and that player keeps
+its window as it is, with no such line.
 
 The playlist is a second native window (`show_viewport_immediate`) docked
 beside the player, as PotPlayer's playlist is:
@@ -198,7 +202,10 @@ A socket path must fit in `sun_path` (104 bytes on macOS, 108 on Linux):
 when the usual name does not (a `$TMPDIR` set by hand, a long user name)
 the file takes a short one, and when even that is too long it goes to
 `/tmp/wfqp-<uid>`, a directory made with mode 0700 and refused if it is
-not this user's, a link, or open to others.
+not this user's, a link, or open to others; on Linux the abstract
+namespace is the last resort. A socket file in a directory not checked to
+be this user's alone (the cache or temporary directory, when there is no
+runtime one) gets the same peer check as the machine-wide names.
 The protocol is a few UTF-8 lines (`play` or `enqueue`, one path per line,
 a blank line, `ok` back); messages are capped in size and count, and one
 that is cut short or over a cap gets no `ok`. A path that is not UTF-8 or
