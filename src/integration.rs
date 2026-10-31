@@ -101,8 +101,8 @@ mod platform {
     fn verb_keys(t: &Strings) -> Vec<(String, &'static str, &'static str)> {
         // (key under HKCU\Software\Classes, label, class the selection is
         // dropped on)
-        let bases = AUDIO_EXTENSIONS
-            .iter()
+        let bases = crate::library::openable_extensions()
+            .into_iter()
             .map(|ext| format!(r"SystemFileAssociations\.{ext}\shell"))
             .chain(std::iter::once(r"Directory\shell".to_string()));
         let mut out = Vec::new();
@@ -174,7 +174,7 @@ mod platform {
             reg_str(&icon),
             reg_str(&format!("\"{exe}\" \"%1\""))
         ));
-        for ext in AUDIO_EXTENSIONS {
+        for ext in crate::library::openable_extensions() {
             s.push_str(&format!("\".{ext}\"=\"\"\r\n"));
         }
         s.push_str("\r\n");
@@ -315,10 +315,10 @@ mod platform {
         import(&registration_script(exe, t))?;
         notify_shell();
         Ok(format!(
-            "registered for the current user: \"{}\" and \"{}\" on {} audio extensions and on folders, plus an \"Open with\" entry ({}).",
+            "registered for the current user: \"{}\" and \"{}\" on {} audio and playlist extensions and on folders, plus an \"Open with\" entry ({}).",
             t.action_play_with,
             t.action_add_to_playlist,
-            AUDIO_EXTENSIONS.len(),
+            crate::library::openable_extensions().len(),
             exe.display()
         ))
     }
@@ -347,6 +347,8 @@ mod platform {
             // "Open with" keeps a command line.
             assert!(s.contains(r#"@="\"C:\\Program Files\\QP\\waveflow-quickplay.exe\" \"%1\"""#));
             assert!(s.contains("\".dsf\"=\"\""));
+            assert!(s.contains("\".m3u8\"=\"\""));
+            assert!(s.contains(r"SystemFileAssociations\.m3u\shell\WaveFlowQuickPlay.Play"));
             // The verbs are drop targets, served by the executable.
             for clsid in [PLAY_CLSID, ENQUEUE_CLSID] {
                 assert!(s.contains(&format!(
@@ -364,7 +366,7 @@ mod platform {
             }
             assert_eq!(
                 s.matches("\"MultiSelectModel\"=\"Player\"").count(),
-                2 * (AUDIO_EXTENSIONS.len() + 1)
+                2 * (crate::library::openable_extensions().len() + 1)
             );
             assert!(!s.contains("--enqueue"));
             // The 1.0.0 key goes on every registration.
@@ -429,7 +431,7 @@ mod platform {
     use super::*;
 
     const DESKTOP_ID: &str = "app.waveflow.quickplay";
-    const MIME_TYPES: &str = "audio/flac;audio/mpeg;audio/mp4;audio/x-m4a;audio/aac;audio/x-aac;audio/ogg;audio/vorbis;audio/x-vorbis+ogg;audio/opus;audio/x-opus+ogg;audio/wav;audio/x-wav;audio/vnd.wave;audio/aiff;audio/x-aiff;audio/x-dsf;audio/x-dff;audio/x-dsd;";
+    const MIME_TYPES: &str = "audio/flac;audio/mpeg;audio/mp4;audio/x-m4a;audio/aac;audio/x-aac;audio/ogg;audio/vorbis;audio/x-vorbis+ogg;audio/opus;audio/x-opus+ogg;audio/wav;audio/x-wav;audio/vnd.wave;audio/aiff;audio/x-aiff;audio/x-dsf;audio/x-dff;audio/x-dsd;audio/x-mpegurl;audio/mpegurl;application/vnd.apple.mpegurl;";
 
     fn data_dir() -> io::Result<PathBuf> {
         dirs::data_dir().ok_or_else(|| io::Error::other("no XDG data directory"))

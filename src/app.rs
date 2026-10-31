@@ -529,9 +529,9 @@ impl QuickPlayApp {
     /// Expand `inputs` and append them. With `autoplay`, start the first new
     /// row when nothing is playing.
     fn add_paths(&mut self, inputs: &[PathBuf], autoplay: bool) {
-        if inputs.iter().any(|p| p.is_dir()) {
-            // Folders are walked on the loader's thread; the result comes
-            // back as `LoaderEvent::Scanned`.
+        if inputs.iter().any(|p| p.is_dir() || library::is_playlist(p)) {
+            // Folders are walked and playlists read on the loader's thread;
+            // the result comes back as `LoaderEvent::Scanned`.
             self.set_status(self.t().status_scanning);
             self.loader
                 .request_scan(inputs.to_vec(), autoplay, self.scan_generation);
@@ -759,7 +759,7 @@ impl QuickPlayApp {
         let t = self.t();
         let dialog = rfd::FileDialog::new()
             .set_title(t.dialog_open_title)
-            .add_filter(t.dialog_filter_audio, library::audio_extensions());
+            .add_filter(t.dialog_filter_audio, &library::openable_extensions());
         if let Some(paths) = dialog.pick_files() {
             self.add_paths(&paths, true);
         }
