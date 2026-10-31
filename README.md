@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.3.0-10b981?style=flat-square" alt="Version 1.3.0" />
+  <img src="https://img.shields.io/badge/version-1.4.0-10b981?style=flat-square" alt="Version 1.4.0" />
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey?style=flat-square" alt="Windows, Linux and macOS" />
   <img src="https://img.shields.io/badge/opens%20in-%3C%20300%20ms-10b981?style=flat-square" alt="Opens in under 300 ms" />
   <img src="https://img.shields.io/badge/license-GPL--3.0--only-green?style=flat-square" alt="GPL-3.0-only" />
@@ -293,6 +293,9 @@ The working set is dominated by the OpenGL driver and the decoded cover
 - **A hand-over to an open QuickPlay** carries at most 10 000 files, in a
   message of at most 4 MiB (the paths with their line breaks and the
   command). A larger selection opens in a window of its own.
+- **Playlists** are read up to 16 MiB. A playlist inside a dropped folder
+  is not read (its files would come twice), nor one named by another
+  playlist, and web addresses in one are left out: QuickPlay plays files.
 - **macOS** ships as an app in a disk image, signed ad hoc rather than by
   an Apple Developer ID, so Gatekeeper blocks the first launch of each
   downloaded version until it is allowed in System Settings › Privacy &
