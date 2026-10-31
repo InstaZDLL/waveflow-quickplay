@@ -52,6 +52,7 @@ pub const STRINGS: Strings = Strings {
     status_cannot_open_waveflow: "无法打开 WaveFlow：{e}",
     status_pin_needs_xwayland: "始终置顶需要 XWayland，但当前会话没有",
     status_cannot_restart: "无法重启 QuickPlay：{e}",
+    status_restart_state_lost: "重启时播放列表丢失",
     status_update_ready: "QuickPlay {v} 将在关闭时安装",
     status_update_available: "QuickPlay {v} 现已可用",
     tip_open_in_waveflow: "在 WaveFlow 中继续播放",

@@ -205,6 +205,9 @@ fn main() -> eframe::Result {
         restart::wait_for_exit(pid);
     }
     let resume = args.restart_state.as_deref().and_then(restart::take_state);
+    // Started as a restart, yet where the player was is gone: it still
+    // opens, empty, and says so rather than look as if nothing was playing.
+    let resume_lost = args.restart_state.is_some() && resume.is_none();
 
     // A restart is the running player itself: it takes the socket over from
     // the previous process, waiting for it to let go if it is slow to exit.
@@ -244,7 +247,7 @@ fn main() -> eframe::Result {
         options,
         Box::new(move |cc| {
             app_created.set(true);
-            let app = QuickPlayApp::new(cc, settings, files, server, resume, xwayland);
+            let app = QuickPlayApp::new(cc, settings, files, server, resume, resume_lost, xwayland);
             tracing::info!(elapsed_ms = started.elapsed().as_millis(), "window ready");
             Ok(Box::new(app))
         }),

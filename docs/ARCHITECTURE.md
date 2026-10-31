@@ -161,6 +161,9 @@ the answer. winit builds one event loop per process, so when
 the window still cannot be made under XWayland (the display answered, the
 window or its OpenGL context did not), the process starts a copy of
 itself on Wayland with `--no-xwayland` and the same state or files.
+A copy started with `--restart-state` that finds no state it can read
+(the file gone, or not one QuickPlay wrote) still opens, with an empty
+playlist, and says so in the status line.
 
 The playlist is a second native window (`show_viewport_immediate`) docked
 beside the player, as PotPlayer's playlist is:

@@ -171,6 +171,7 @@ impl QuickPlayApp {
         files: Vec<PathBuf>,
         ipc: Option<ipc::Server>,
         resume: Option<Resume>,
+        resume_lost: bool,
         xwayland: bool,
     ) -> Self {
         theme::apply(&cc.egui_ctx);
@@ -252,6 +253,9 @@ impl QuickPlayApp {
         }
         if let Some(resume) = resume {
             app.resume(resume);
+        }
+        if resume_lost {
+            app.set_status(app.t().status_restart_state_lost);
         }
         app
     }

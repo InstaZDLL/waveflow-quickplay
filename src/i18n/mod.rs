@@ -208,6 +208,10 @@ pub struct Strings {
     /// `{e}` is why QuickPlay could not start again under the other
     /// window system.
     pub status_cannot_restart: &'static str,
+    /// QuickPlay restarted under the other window system (the pin under
+    /// Wayland) and the state the previous process left could not be read:
+    /// it runs, with an empty playlist.
+    pub status_restart_state_lost: &'static str,
     /// `{v}` is the version of an update downloaded at launch, installed
     /// when QuickPlay closes.
     pub status_update_ready: &'static str,

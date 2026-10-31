@@ -52,6 +52,7 @@ pub const STRINGS: Strings = Strings {
     status_cannot_open_waveflow: "WaveFlow를 열 수 없음: {e}",
     status_pin_needs_xwayland: "항상 위에 표시에는 XWayland가 필요하지만 이 세션에는 없습니다",
     status_cannot_restart: "QuickPlay를 다시 시작할 수 없음: {e}",
+    status_restart_state_lost: "다시 시작하면서 재생목록을 잃었습니다",
     status_update_ready: "QuickPlay {v} 업데이트는 종료할 때 설치됩니다",
     status_update_available: "QuickPlay {v} 업데이트를 사용할 수 있습니다",
     tip_open_in_waveflow: "WaveFlow에서 계속 듣기",

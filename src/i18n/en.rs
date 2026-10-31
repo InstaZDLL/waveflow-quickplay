@@ -53,6 +53,7 @@ pub const STRINGS: Strings = Strings {
     status_cannot_open_waveflow: "Cannot open WaveFlow: {e}",
     status_pin_needs_xwayland: "Always on top needs XWayland, which this session does not have",
     status_cannot_restart: "Cannot restart QuickPlay: {e}",
+    status_restart_state_lost: "Playlist lost while restarting",
     status_update_ready: "QuickPlay {v} will be installed when you close it",
     status_update_available: "QuickPlay {v} is available",
     tip_open_in_waveflow: "Continue in WaveFlow",
