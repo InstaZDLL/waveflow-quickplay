@@ -1,6 +1,6 @@
 [package]
 name = "waveflow-quickplay"
-version = "1.3.0"
+version = "1.4.0"
 description = "WaveFlow QuickPlay — a standalone, lightweight egui/eframe audio player built on WaveFlow's Rust audio infrastructure."
 authors = ["InstaZDLL <github.105mh@8shield.net>"]
 edition = "2021"
