@@ -131,7 +131,7 @@ windows = { version = "0.62", features = [
     "Win32_UI_Shell",
 ] }
 # `#[implement]` expands to paths in `windows_core`.
-windows-core = "0.62"
+windows-core = "0.100"
 
 [target.'cfg(unix)'.dependencies]
 # `geteuid`: the single-instance socket checks who is at the other end on
