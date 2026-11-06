@@ -1,0 +1,302 @@
+# GitLab CI/CD: the standby twin of .github/workflows/ci.yml and release.yml.
+#
+# Nothing runs it while the repository lives on GitHub. It is here so that
+# losing the GitHub account costs a few hours of setup rather than a rewrite
+# of the release pipeline: docs/RELEASING.md#switching-to-gitlab says what
+# to create first, and what this file does not replace.
+#
+# What it covers:
+#   - on a merge request and on the default branch: the checks of ci.yml
+#     (Linux and Windows; macOS runners are not on the Free tier);
+#   - on a tag vX.Y.Z: the three builds of release.yml, signed as it signs
+#     them, published on WaveFlow's R2 bucket, the host the updater reads
+#     once GitHub is gone (src/update.rs), and as a GitLab release whose
+#     files are links there.
+#
+# Each job follows the release.yml job of the same name: change both
+# together. The update manifest is signed by scripts/release/sign-manifest.sh
+# and copied by scripts/release/publish-r2.sh, which release.yml runs too.
+# The difference is where the manifest points: on GitHub at the release
+# (then copied to R2), here straight at R2, the only host there is.
+#
+# Runners (GitLab.com hosted, https://docs.gitlab.com/ci/runners/hosted_runners/):
+#   - Linux: saas-linux-medium-amd64 (4 vCPU, 16 GB), on every tier.
+#   - Windows: saas-windows-medium-amd64 (2 vCPU, 7.5 GB), on every tier, in
+#     beta. PowerShell, no `image:`; Visual Studio Build Tools, CMake and
+#     Git are preinstalled, Rust is not.
+#   - macOS: saas-macos-medium-m1 needs Premium or Ultimate (or the GitLab
+#     for Open Source program). Otherwise register a runner of your own on a
+#     Mac and set MACOS_RUNNER_TAG to its tag (shell executor, Xcode command
+#     line tools, Homebrew).
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE == "push"
+  auto_cancel:
+    on_new_commit: interruptible
+
+stages:
+  - check
+  - build
+  - publish
+
+variables:
+  # The bucket's public domain, as compiled into the app. A project variable
+  # overrides it, as the R2_PUBLIC_URL variable does on GitHub.
+  R2_PUBLIC_URL: https://download.waveflow.app
+  MACOS_RUNNER_TAG: saas-macos-medium-m1
+  # The packaging tools, pinned as in release.yml.
+  CARGO_PACKAGER_VERSION: "0.11.8"
+  CARGO_GENERATE_RPM_VERSION: "0.21.1"
+  RSIGN_VERSION: "0.6.7"
+
+# ---------------------------------------------------------------- templates
+
+.ci-rules:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE == "push"
+
+.release-rules:
+  rules:
+    - if: $CI_COMMIT_TAG
+
+.linux-medium:
+  tags: [saas-linux-medium-amd64]
+
+# The compiler comes from rust-toolchain.toml: rustup is installed with no
+# default toolchain, and `rustup toolchain install` with no argument reads
+# the file.
+.rustup-bash: &rustup-bash
+  - curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+  - export PATH="$HOME/.cargo/bin:$PATH"
+  - rustup toolchain install
+  - rustc --version
+
+.rust-windows:
+  tags: [saas-windows-medium-amd64]
+  before_script:
+    - $ProgressPreference = 'SilentlyContinue'
+    - Invoke-WebRequest https://win.rustup.rs/x86_64 -OutFile rustup-init.exe
+    - .\rustup-init.exe -y --profile minimal --default-toolchain none
+    - $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
+    - rustup toolchain install
+    - rustc --version
+
+.linux-deps: &linux-deps
+  - apt-get update
+  - >-
+    apt-get install -y --no-install-recommends
+    ca-certificates curl git build-essential pkg-config cmake
+    libasound2-dev libxkbcommon-dev libwayland-dev
+
+# ------------------------------------------------------------- checks (ci.yml)
+
+rust-linux:
+  extends: [.ci-rules, .linux-medium]
+  stage: check
+  image: ubuntu:24.04
+  interruptible: true
+  timeout: 1h
+  variables:
+    DEBIAN_FRONTEND: noninteractive
+  script:
+    - *linux-deps
+    - *rustup-bash
+    - cargo fmt --all --check
+    - cargo clippy --all-targets --locked -- -D warnings
+    - cargo test --locked
+
+rust-windows:
+  extends: [.ci-rules, .rust-windows]
+  stage: check
+  interruptible: true
+  timeout: 1h
+  script:
+    - cargo clippy --all-targets --locked -- -D warnings
+    - cargo test --locked
+
+# ------------------------------------------------------- release (release.yml)
+
+# The tag must match Cargo.toml and have its notes.
+version:
+  extends: [.release-rules, .linux-medium]
+  stage: check
+  image: alpine:3.20
+  script:
+    - version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+    - test "v$version" = "$CI_COMMIT_TAG" || { echo "tag $CI_COMMIT_TAG does not match version $version"; exit 1; }
+    - test -f "docs/releases/$CI_COMMIT_TAG.md" || { echo "docs/releases/$CI_COMMIT_TAG.md is missing"; exit 1; }
+
+release-windows:
+  extends: [.release-rules, .rust-windows]
+  stage: build
+  needs: [version]
+  timeout: 2h
+  script:
+    - cargo test --locked
+    - cargo install cargo-packager --version "$env:CARGO_PACKAGER_VERSION" --locked
+    # Everything is compiled before the certificate enters the runner, so no
+    # build script of any dependency runs while the key is importable.
+    - cargo build --release --locked
+    # Authenticode, as release.yml does it: the certificate into the user's
+    # store, cargo-packager signing by its thumbprint. The thumbprint is
+    # written down for after_script, which runs in a shell of its own.
+    - if (-not $env:SIGNTOOL_PFX_BASE64 -or -not $env:SIGNTOOL_PFX_PASSWORD) { Write-Error "SIGNTOOL_PFX_BASE64 and SIGNTOOL_PFX_PASSWORD are required to publish a release"; exit 1 }
+    - $pfx = Join-Path $env:CI_PROJECT_DIR "signing.pfx"
+    - "[IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:SIGNTOOL_PFX_BASE64))"
+    - $password = ConvertTo-SecureString $env:SIGNTOOL_PFX_PASSWORD -AsPlainText -Force
+    - $cert = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $password
+    - Remove-Item $pfx
+    - $thumbprint = $cert.Thumbprint
+    - Set-Content -Path (Join-Path $env:CI_PROJECT_DIR "signing.thumbprint") -Value $thumbprint
+    - if (-not $cert.HasPrivateKey) { Write-Error "the PFX has no private key"; exit 1 }
+    - Write-Host "Signing with $($cert.Subject) ($thumbprint), valid until $($cert.NotAfter)"
+    - >-
+      Add-Content Cargo.toml "`n[package.metadata.packager.windows]`ndigest-algorithm = `"SHA256`"`ncertificate-thumbprint = `"$thumbprint`"`ntimestamp-url = `"http://timestamp.digicert.com`"`ntsp = true"
+    - cargo packager --release --formats nsis
+    # release.yml's "Check the signatures", shortened: signed with this
+    # certificate, timestamped, and the hash matches the file.
+    - >-
+      foreach ($file in @(Get-ChildItem target/packager/*.exe) + @(Get-Item target/release/waveflow-quickplay.exe)) {
+      $sig = Get-AuthenticodeSignature $file.FullName;
+      if ($sig.Status.ToString() -notin @('Valid', 'UnknownError', 'NotTrusted')) { Write-Error "$($file.Name) has a bad signature ($($sig.Status))"; exit 1 }
+      if ($sig.SignerCertificate.Thumbprint -ne $thumbprint) { Write-Error "$($file.Name) is not signed with the release certificate"; exit 1 }
+      if (-not $sig.TimeStamperCertificate) { Write-Error "$($file.Name) has no timestamp"; exit 1 }
+      Write-Host "$($file.Name): signed by $($sig.SignerCertificate.Subject), $($sig.Status)" }
+    # LF line ends, as sha256sum writes them.
+    - $lines = Get-ChildItem target/packager/*.exe | ForEach-Object { "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name }
+    - "[IO.File]::WriteAllText((Join-Path $PWD target/packager/SHA256SUMS-windows.txt), (($lines -join \"`n\") + \"`n\"))"
+  after_script:
+    - $file = Join-Path $env:CI_PROJECT_DIR "signing.thumbprint"
+    - if (Test-Path $file) { $t = (Get-Content $file).Trim(); Get-ChildItem Cert:\CurrentUser\My | Where-Object { $_.Thumbprint -eq $t } | Remove-Item; Remove-Item $file }
+    - Remove-Item (Join-Path $env:CI_PROJECT_DIR "signing.pfx") -ErrorAction SilentlyContinue
+  artifacts:
+    paths: [target/packager/*.exe, target/packager/SHA256SUMS-windows.txt]
+    expire_in: 1 week
+
+# Ubuntu 22.04, as release.yml: the packages need at least the glibc the
+# binary was linked against.
+release-linux:
+  extends: [.release-rules, .linux-medium]
+  stage: build
+  needs: [version]
+  image: ubuntu:22.04
+  timeout: 2h
+  variables:
+    DEBIAN_FRONTEND: noninteractive
+    # linuxdeploy and appimagetool are AppImages themselves; no FUSE here.
+    APPIMAGE_EXTRACT_AND_RUN: "1"
+  script:
+    - *linux-deps
+    - apt-get install -y --no-install-recommends libfuse2 file rpm binutils
+    - *rustup-bash
+    - cargo test --locked
+    - cargo install cargo-packager --version "$CARGO_PACKAGER_VERSION" --locked
+    - cargo install cargo-generate-rpm --version "$CARGO_GENERATE_RPM_VERSION" --locked
+    # The .deb depends on the newest GLIBC_ symbol version the binary uses.
+    - cargo build --release --locked
+    - glibc=$(LC_ALL=C objdump -T target/release/waveflow-quickplay | grep -o 'GLIBC_[0-9.]*' | cut -d_ -f2 | sort -uV | tail -1)
+    - echo "needs glibc $glibc"
+    - sed -i "s/^depends = \[/depends = [\"libc6 (>= $glibc)\", /" Cargo.toml
+    - cargo packager --release --formats deb,appimage
+    # release.yml's RPM step.
+    - |
+      cat packaging/rpm.toml >> Cargo.toml
+      LC_ALL=C objdump -p target/release/waveflow-quickplay | awk '
+        $1 == "NEEDED" { print "\"" $2 "()(64bit)\" = \"*\"" }
+        /required from/ { lib = $NF; sub(/:$/, "", lib) }
+        lib && NF == 4 && $4 ~ /_/ { print "\"" lib "(" $4 ")(64bit)\" = \"*\"" }
+      ' | sort -u >> Cargo.toml
+      cargo generate-rpm --payload-compress zstd
+      rpm=$(ls target/generate-rpm/*.rpm)
+      mv "$rpm" target/packager/
+      rpm=target/packager/$(basename "$rpm")
+      rpm -qpl "$rpm" | grep -qx /usr/bin/waveflow-quickplay
+      rpm -qpl "$rpm" | grep -qx /usr/share/applications/app.waveflow.quickplay.desktop
+      rpm -qpR "$rpm" | grep -q 'libasound.so.2'
+      rpm -qpR "$rpm" | grep -q 'libc.so.6(GLIBC_'
+    - cd target/packager && sha256sum *.deb *.rpm *.AppImage > SHA256SUMS-linux.txt && cat SHA256SUMS-linux.txt
+  artifacts:
+    paths:
+      - target/packager/*.deb
+      - target/packager/*.rpm
+      - target/packager/*.AppImage
+      - target/packager/SHA256SUMS-linux.txt
+    expire_in: 1 week
+
+release-macos:
+  extends: .release-rules
+  stage: build
+  needs: [version]
+  tags: [$MACOS_RUNNER_TAG]
+  # Read by GitLab's hosted macOS runners only; a runner of your own ignores it.
+  image: macos-15-xcode-16
+  timeout: 2h
+  variables:
+    MACOSX_DEPLOYMENT_TARGET: "11.0"
+  script:
+    - *rustup-bash
+    - rustup target add aarch64-apple-darwin x86_64-apple-darwin
+    - cmake --version || brew install cmake
+    - cargo test --locked
+    - cargo build --release --locked --target aarch64-apple-darwin
+    - cargo build --release --locked --target x86_64-apple-darwin
+    - mkdir -p target/universal
+    - >-
+      lipo -create -output target/universal/waveflow-quickplay
+      target/aarch64-apple-darwin/release/waveflow-quickplay
+      target/x86_64-apple-darwin/release/waveflow-quickplay
+    # Signed ad hoc, as on GitHub (packaging/macos/bundle.sh).
+    - version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+    - mkdir -p target/packager
+    - bash packaging/macos/bundle.sh target/universal/waveflow-quickplay "$version" target/packager
+    - app="target/packager/WaveFlow QuickPlay.app"
+    - codesign --display --verbose=2 "$app" 2>&1 | grep -q 'Signature=adhoc'
+    - lipo -info "$app/Contents/MacOS/waveflow-quickplay" | grep -q 'x86_64 arm64'
+    - cd target/packager && shasum -a 256 *.dmg > SHA256SUMS-macos.txt && cat SHA256SUMS-macos.txt
+  artifacts:
+    paths: [target/packager/*.dmg, target/packager/SHA256SUMS-macos.txt]
+    expire_in: 1 week
+
+# R2 is the only host here, so missing R2 variables fail the release instead
+# of skipping the copy as on GitHub. The GitLab release holds links, not
+# files: a project's storage quota would not take a set of packages per
+# version.
+publish:
+  extends: [.release-rules, .linux-medium]
+  stage: publish
+  # One publish at a time: each reads the manifest on R2 before replacing it.
+  resource_group: r2-quickplay
+  image: ubuntu:24.04
+  needs: [release-windows, release-linux, release-macos]
+  variables:
+    DEBIAN_FRONTEND: noninteractive
+  script:
+    - apt-get update && apt-get install -y --no-install-recommends ca-certificates curl unzip jq build-essential
+    - curl -fsSL https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o awscliv2.zip
+    - unzip -q awscliv2.zip && ./aws/install && rm -rf aws awscliv2.zip
+    - *rustup-bash
+    # Built before the key is read, as in release.yml.
+    - cargo install rsign2 --version "$RSIGN_VERSION" --locked
+    - export TAG_NAME="$CI_COMMIT_TAG" VERSION="${CI_COMMIT_TAG#v}"
+    - test "$(bash scripts/release/publish-r2.sh --check)" = configured || { echo "the four R2_* variables are required"; exit 1; }
+    - mkdir dist && cp target/packager/*.exe target/packager/*.deb target/packager/*.rpm target/packager/*.AppImage target/packager/*.dmg target/packager/SHA256SUMS-*.txt dist/
+    - UPDATE_KEY="$QUICKPLAY_UPDATE_KEY" bash scripts/release/sign-manifest.sh dist "${R2_PUBLIC_URL%/}/quickplay/releases/$TAG_NAME" dist/latest.json
+    - bash scripts/release/publish-r2.sh dist dist/latest.json
+    - |
+      base="${R2_PUBLIC_URL%/}/quickplay/releases/$TAG_NAME"
+      links=$(cd dist && for f in *; do [ "$f" = latest.json ] || printf '%s\n' "$f"; done |
+        jq -R --arg base "$base" '{name: ., url: ($base + "/" + .), link_type: "package"}' | jq -s .)
+      jq -n --arg tag "$TAG_NAME" --rawfile notes "docs/releases/$TAG_NAME.md" --argjson links "$links" \
+        '{tag_name: $tag, name: ("WaveFlow QuickPlay " + $tag), description: $notes, assets: {links: $links}}' > release.json
+      code=$(curl -sS -o response.json -w '%{http_code}' -X POST \
+        -H "JOB-TOKEN: $CI_JOB_TOKEN" -H "Content-Type: application/json" \
+        --data @release.json "$CI_API_V4_URL/projects/$CI_PROJECT_ID/releases")
+      case "$code" in
+        201) echo "GitLab release $TAG_NAME created with $(jq length <<<"$links") links" ;;
+        409) echo "GitLab release $TAG_NAME already exists" ;; # a retried job
+        *) cat response.json; exit 1 ;;
+      esac

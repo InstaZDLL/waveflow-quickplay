@@ -390,13 +390,19 @@ jobs:
             echo "::error::$RELEASE_TAG moved from $BUILT_SHA to $now during the run"
             exit 1
           fi
-      # The update manifest QuickPlay reads at launch (src/update.rs): the
-      # packages it can install by itself, each signed with the release key
-      # (minisign) under a trusted comment naming the version and the file,
-      # so that the unsigned manifest cannot pass one off as another
-      # version. A Linux-only rebuild keeps the Windows and macOS entries
-      # of the manifest already on the release. The signing tool is built
-      # in a step of its own, so no build script sees the key.
+      # The update manifest QuickPlay reads at launch (src/update.rs), signed
+      # by scripts/release/sign-manifest.sh, which .gitlab-ci.yml runs too.
+      # A Linux-only rebuild keeps the Windows and macOS entries of the
+      # manifest already on the release. The signing tool is built in a
+      # step of its own, so no build script sees the key. The script comes
+      # from the workflow's own commit, so a rebuild of a tag older than it
+      # signs the same way.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: workflow-ref
+          sparse-checkout: scripts
+          persist-credentials: false
       - run: cargo install rsign2 --version "$RSIGN_VERSION" --locked
       - name: Update manifest
         env:
@@ -404,16 +410,7 @@ jobs:
           UPDATE_KEY: ${{ secrets.QUICKPLAY_UPDATE_KEY }}
           LINUX_ONLY: ${{ inputs.linux_only }}
         run: |
-          if [ -z "$UPDATE_KEY" ]; then
-            echo "::error::QUICKPLAY_UPDATE_KEY is required to publish a release"
-            exit 1
-          fi
-          key="$RUNNER_TEMP/update.key"
-          trap 'rm -f "$key"' EXIT
-          (umask 077 && printf '%s\n' "$UPDATE_KEY" > "$key")
-          version=${RELEASE_TAG#v}
-          base="https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG"
-          manifest='{"platforms":{}}'
+          export VERSION=${RELEASE_TAG#v}
           # Only a release that does not exist yet, or has no manifest,
           # starts from an empty one; any other failure stops here rather
           # than publish a manifest without Windows and macOS.
@@ -421,40 +418,16 @@ jobs:
             if assets=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' 2> "$RUNNER_TEMP/view.err"); then
               if grep -qx latest.json <<< "$assets"; then
                 gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" -p latest.json -O "$RUNNER_TEMP/previous.json"
-                manifest=$(jq -e 'select(.platforms | type == "object")' "$RUNNER_TEMP/previous.json")
-                # The entries kept are signed for the release's version;
-                # another one, or none, would leave them unusable.
-                previous=$(jq -r '.version // empty' <<< "$manifest")
-                if [ "$previous" != "$version" ]; then
-                  echo "::error::latest.json on $RELEASE_TAG is for ${previous:-no version}, not $version"
-                  exit 1
-                fi
+                export PREVIOUS="$RUNNER_TEMP/previous.json"
               fi
             elif ! grep -qi "release not found" "$RUNNER_TEMP/view.err"; then
               cat "$RUNNER_TEMP/view.err"
               exit 1
             fi
           fi
-          # sign <platform> <glob>: exactly one file must match.
-          sign() {
-            set -- "$1" $2
-            if [ $# -ne 2 ] || [ ! -f "$2" ]; then
-              echo "::error::expected one package for $1"
-              exit 1
-            fi
-            name=$(basename "$2")
-            rsign sign -W -s "$key" -t "waveflow-quickplay $version $name" -x "$RUNNER_TEMP/$name.minisig" "$2" < /dev/null
-            manifest=$(jq --arg p "$1" --arg url "$base/$name" --rawfile sig "$RUNNER_TEMP/$name.minisig" \
-              '.platforms[$p] = {url: $url, signature: $sig}' <<< "$manifest")
-          }
-          sign linux-x86_64-appimage 'dist/*.AppImage'
-          if [ "$LINUX_ONLY" != "true" ]; then
-            sign windows-x86_64 'dist/*.exe'
-            sign darwin-universal 'dist/*.dmg'
-          fi
-          jq --arg v "$version" --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            '.version = $v | .pub_date = $date' <<< "$manifest" > dist/latest.json
-          cat dist/latest.json
+          bash workflow-ref/scripts/release/sign-manifest.sh dist \
+            "https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG" dist/latest.json
+          rm -rf workflow-ref
       # On an existing release the files replace their namesakes, the
       # others are kept, and the body is rewritten from the notes at the tag.
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
@@ -464,3 +437,44 @@ jobs:
           body_path: docs/releases/${{ env.RELEASE_TAG }}.md
           files: dist/*
           generate_release_notes: false
+
+  # The release's files and manifest copied onto WaveFlow's R2 bucket, the
+  # updater's second host (src/update.rs), by scripts/release/publish-r2.sh:
+  # what keeps updates and downloads working if the GitHub account does not.
+  # It runs after the GitHub release is out and downloads it back, so a
+  # Linux-only rebuild copies the whole release. Without the R2_* secrets it
+  # ends green after saying so; with only some of them it fails, alone.
+  mirror:
+    name: Copy to R2
+    needs: publish
+    if: ${{ always() && needs.publish.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    # One copy at a time: each reads the manifest on R2 before replacing it.
+    concurrency:
+      group: r2-quickplay
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: scripts
+          persist-credentials: false
+      - name: Copy the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_PUBLIC_URL: ${{ vars.R2_PUBLIC_URL }}
+        run: |
+          if [ "$(bash scripts/release/publish-r2.sh --check)" = absent ]; then
+            echo "::notice::No R2_* secret set: the release is not copied to R2"
+            exit 0
+          fi
+          aws --version
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir "$RUNNER_TEMP/release"
+          TAG_NAME="$RELEASE_TAG" bash scripts/release/publish-r2.sh "$RUNNER_TEMP/release" "$RUNNER_TEMP/release/latest.json"

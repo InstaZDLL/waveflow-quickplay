@@ -312,8 +312,16 @@ development build reports the version of the last release cut.
 ## Updates
 
 At launch, unless `check_updates` is off in the settings, `src/update.rs`
-reads `latest.json` from the latest GitHub release on a thread of its own
-(`reqwest` blocking, the client `waveflow-core` already builds). The
+reads `latest.json` on a thread of its own (`reqwest` blocking, the client
+`waveflow-core` already builds) from two hosts, one after the other: the
+latest GitHub release, and its copy on WaveFlow's R2 bucket
+(`https://download.waveflow.app/quickplay/latest.json`), which keeps
+updates working if the GitHub account goes ([RELEASING.md](RELEASING.md)).
+Each manifest gets 30 seconds; a host that fails in any way (an error, a
+page that is not a manifest, a stale version) hides nothing the other one
+offers, and only both failing is an error. The newest version either
+offers wins; when both offer it, GitHub's package is tried first and R2's
+if it cannot be downloaded or does not verify. The
 manifest gives the version and, per package QuickPlay can install by
 itself, its URL and its minisign signature: `windows-x86_64` (the NSIS
 installer), `darwin-universal` (the disk image) and

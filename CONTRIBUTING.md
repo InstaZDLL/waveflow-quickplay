@@ -97,9 +97,10 @@ test checks the placeholders.
 Version in `Cargo.toml`, notes in `docs/releases/v<version>.md`, then a
 `v<version>` tag: `.github/workflows/release.yml` builds the signed Windows
 installer, the `.deb`, the `.rpm`, the AppImage and the macOS disk image
-(a universal app signed ad hoc, `packaging/macos/bundle.sh`) and publishes
-the GitHub release.
-Only the maintainers tag.
+(a universal app signed ad hoc, `packaging/macos/bundle.sh`), publishes
+the GitHub release and copies it to R2, the updater's second host.
+Only the maintainers tag. [docs/RELEASING.md](docs/RELEASING.md) lists the
+secrets and how releases move to GitLab if GitHub is lost.
 
 ## Reporting bugs and security issues
 
