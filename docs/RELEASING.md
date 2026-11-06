@@ -130,16 +130,19 @@ secret only to the step that names it; GitLab gives a variable to the whole
 job, and a shell runner writes the job's variables into the script file it
 runs, where any program of the job can read them, whatever the job does
 with them afterwards. A scoped variable reaches only the jobs that name its
-environment: `sign-windows` and `publish`, which compile nothing and run
-tools built by jobs of their own (`tools-windows`, `tools-linux`). No build
-script and no test ever runs in a job that has a secret. A secret left at
-the default scope, `*`, undoes that: keep the scopes, and keep any job added
-that compiles out of those two environments. The two environments show up
-under Operate → Environments once a release has run.
+environment: `sign-windows` (the certificate), `sign-manifest` (the release
+key) and `publish` (the R2 token), which compile nothing and run tools built
+by jobs of their own (`tools-windows`, `tools-linux`). No build script and
+no test ever runs in a job that has a secret, and no secret shares a job
+with another: the release key never sits in the job that downloads and runs
+the AWS CLI installer. A secret left at the default scope, `*`, undoes that:
+keep the scopes, and keep any job added that compiles out of those three
+environments. They show up under Operate → Environments once a release has
+run.
 
 | Variable                                                                 | Environment scope | Notes                                                     |
 | ------------------------------------------------------------------------ | ----------------- | --------------------------------------------------------- |
-| `QUICKPLAY_UPDATE_KEY`                                                   | `release-publish` | the same key: installed copies trust only its public half |
+| `QUICKPLAY_UPDATE_KEY`                                                   | `release-manifest` | the same key: installed copies trust only its public half |
 | `SIGNTOOL_PFX_BASE64`, `SIGNTOOL_PFX_PASSWORD`                           | `release-signing` | the same certificate                                      |
 | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_ACCOUNT_ID`, `R2_BUCKET` | `release-publish` | **required** here: R2 is the only host                    |
 | `R2_PUBLIC_URL`                                                          | `*`               | only if the domain is not `https://download.waveflow.app` |

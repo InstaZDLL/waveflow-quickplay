@@ -81,6 +81,7 @@ pub enum Install {
 }
 
 impl Install {
+    /// How this copy was installed, read from where its executable is.
     pub fn detect() -> Self {
         let Ok(exe) = std::env::current_exe() else {
             return Install::Elsewhere;
@@ -144,6 +145,7 @@ fn appimage_of(
     exe.starts_with(appdir?).then(|| image.map(PathBuf::from))?
 }
 
+/// Whether this user may write `path`, by the kernel's own check.
 #[cfg(unix)]
 fn writable(path: &Path) -> bool {
     use std::os::unix::ffi::OsStrExt;
@@ -155,6 +157,7 @@ fn writable(path: &Path) -> bool {
     unsafe { libc::access(c.as_ptr(), libc::W_OK) == 0 }
 }
 
+/// Taken as writable elsewhere: a write that fails says so when it happens.
 #[cfg(not(unix))]
 fn writable(_: &Path) -> bool {
     true
@@ -199,6 +202,8 @@ pub fn spawn_check(notify: impl Fn() + Send + 'static) -> mpsc::Receiver<Found> 
     rx
 }
 
+/// Looks for a newer version on the update hosts and, when this copy can
+/// install it, downloads and verifies it.
 fn check(install: &Install) -> io::Result<Option<Found>> {
     // A test manifest replaces both hosts, in any build.
     let urls = match std::env::var("QUICKPLAY_UPDATE_URL") {
@@ -303,6 +308,7 @@ fn check_at(
     Err(last_error.unwrap_or_else(|| io::Error::other("no package")))
 }
 
+/// The manifest at `url`, if it reads as one, with a version that parses.
 fn read_manifest(client: &reqwest::blocking::Client, url: &str) -> io::Result<Manifest> {
     let response = client
         .get(url)
@@ -414,6 +420,7 @@ fn file_name(url: &str) -> Option<&str> {
     plain.then_some(name)
 }
 
+/// Where updates are downloaded to: `<cache dir>/waveflow-quickplay/updates`.
 fn cache_dir() -> Option<PathBuf> {
     dirs::cache_dir().map(|d| d.join("waveflow-quickplay").join("updates"))
 }
@@ -432,6 +439,7 @@ fn clear_cache(dir: &Path, keep: &[PathBuf]) {
     }
 }
 
+/// An `InvalidData` error saying `e`.
 fn invalid(e: impl ToString) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, e.to_string())
 }
@@ -531,12 +539,14 @@ fn replace_appimage(new: &Path, image: &Path) -> io::Result<()> {
     result
 }
 
+/// Marks a new AppImage executable (`rwxr-xr-x`).
 #[cfg(unix)]
 fn set_executable(file: &std::fs::File) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     file.set_permissions(std::fs::Permissions::from_mode(0o755))
 }
 
+/// Nothing to mark outside Unix.
 #[cfg(not(unix))]
 fn set_executable(_: &std::fs::File) -> io::Result<()> {
     Ok(())
@@ -555,11 +565,13 @@ trusted comment: waveflow-quickplay 1.2.3 test.bin
 2uxf9Jw1xvGmti8wC/Qq7BSjyyJO6Dc/8aPrzDjEz7Nd4wvstABBs3ef6IDagkp59iJoM35EXg8/8UmUeCN7BA==
 ";
 
+    /// A package and the signature the test key made for it agree.
     #[test]
     fn a_signed_package_passes() {
         verify(TEST_KEY, TEST_PACKAGE, TEST_SIGNATURE, "1.2.3", "test.bin").unwrap();
     }
 
+    /// One flipped bit fails the signature.
     #[test]
     fn a_changed_package_fails() {
         let mut changed = TEST_PACKAGE.to_vec();
@@ -567,6 +579,7 @@ trusted comment: waveflow-quickplay 1.2.3 test.bin
         assert!(verify(TEST_KEY, &changed, TEST_SIGNATURE, "1.2.3", "test.bin").is_err());
     }
 
+    /// The release key does not accept what the test key signed.
     #[test]
     fn another_key_fails() {
         assert!(verify(
@@ -587,6 +600,7 @@ trusted comment: waveflow-quickplay 1.2.3 test.bin
         assert!(verify(TEST_KEY, TEST_PACKAGE, TEST_SIGNATURE, "1.2.3", "other.bin").is_err());
     }
 
+    /// `APPIMAGE` counts only when this executable runs from that image's mount.
     #[test]
     fn an_appimage_is_the_one_whose_mount_runs_this() {
         let image = || Some("/home/u/Apps/waveflow-quickplay.AppImage".into());
@@ -622,17 +636,20 @@ trusted comment: waveflow-quickplay 1.2.3 test.bin
         );
     }
 
+    /// A read past its limit is refused, one at the limit is not.
     #[test]
     fn reads_stop_at_the_limit() {
         assert_eq!(read_at_most(&b"1234"[..], 4, "t").unwrap(), b"1234");
         assert!(read_at_most(&b"12345"[..], 4, "t").is_err());
     }
 
+    /// The public key compiled in is a valid minisign key.
     #[test]
     fn the_release_key_reads() {
         minisign_verify::PublicKey::from_base64(PUBLIC_KEY).unwrap();
     }
 
+    /// Only a plain last segment of a URL becomes a file in the cache.
     #[test]
     fn file_names_are_plain() {
         let base = "https://github.com/InstaZDLL/waveflow-quickplay/releases/download/v1.2.0/";
@@ -645,6 +662,7 @@ trusted comment: waveflow-quickplay 1.2.3 test.bin
         assert_eq!(file_name("https://example.org/a%2F..%2Fb"), None);
     }
 
+    /// A manifest offering `version` for Windows at `url`.
     fn manifest(version: &str, url: &str) -> Manifest {
         Manifest {
             version: version.into(),
@@ -673,6 +691,7 @@ trusted comment: waveflow-quickplay 1.2.3 test.bin
             .collect()
     }
 
+    /// One `offers` entry: a version and its package URLs.
     fn offer(version: &str, urls: &[&str]) -> (String, Vec<String>) {
         (version.into(), urls.iter().map(|u| u.to_string()).collect())
     }
@@ -703,6 +722,7 @@ trusted comment: waveflow-quickplay 1.2.3 test.bin
         );
     }
 
+    /// Nothing newer than this copy, or no manifest, is no update.
     #[test]
     fn nothing_newer_is_no_update() {
         assert!(offers(
@@ -726,6 +746,7 @@ trusted comment: waveflow-quickplay 1.2.3 test.bin
         );
     }
 
+    /// A manifest whose version does not parse is left out, not an error.
     #[test]
     fn a_manifest_without_a_version_is_left_out() {
         assert_eq!(
@@ -780,6 +801,7 @@ trusted comment: waveflow-quickplay 1.2.3 test.bin
         .unwrap()
     }
 
+    /// One route of the test server.
     fn route(path: &str, status: u16, body: &[u8]) -> (String, u16, Vec<u8>) {
         (path.into(), status, body.to_vec())
     }
@@ -818,6 +840,8 @@ trusted comment: waveflow-quickplay 1.2.3 test.bin
         found
     }
 
+    /// A host answering with a page that is not a manifest leaves the update to
+    /// the other one.
     #[test]
     fn a_host_that_fails_leaves_it_to_the_other() {
         let found = check_two_hosts("manifest", |base| {
@@ -834,6 +858,7 @@ trusted comment: waveflow-quickplay 1.2.3 test.bin
         assert_eq!(found.unwrap(), ("1.2.3".into(), TEST_PACKAGE.to_vec()));
     }
 
+    /// A package that cannot be downloaded is fetched from the other host.
     #[test]
     fn a_package_that_fails_leaves_it_to_the_other_host() {
         let found = check_two_hosts("package", |base| {
@@ -878,6 +903,7 @@ trusted comment: waveflow-quickplay 1.2.3 test.bin
         assert_eq!(found.unwrap(), ("1.2.3".into(), TEST_PACKAGE.to_vec()));
     }
 
+    /// No manifest at all is an error, not "up to date".
     #[test]
     fn every_host_failing_is_an_error() {
         let found = check_two_hosts("down", |_| vec![route("/a/latest.json", 503, b"")]);
@@ -895,6 +921,7 @@ trusted comment: waveflow-quickplay 1.2.3 test.bin
         );
     }
 
+    /// The manifest format the release workflows write reads.
     #[test]
     fn the_manifest_reads() {
         let json = r#"{

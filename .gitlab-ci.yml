@@ -71,13 +71,14 @@ variables:
 # Secrets. GitHub hands a secret only to the step that names it; GitLab gives
 # a variable to the whole job, and a shell runner writes the job's variables
 # into the script file it runs, where any program of the job can read them.
-# So the secrets are scoped to two GitLab environments
-# (docs/RELEASING.md#variables-to-create), and only two jobs, which compile
-# nothing, name one:
+# So the secrets are scoped to three GitLab environments
+# (docs/RELEASING.md#variables-to-create), and only three jobs, which
+# compile nothing, name one:
 #   - sign-windows, environment release-signing: SIGNTOOL_PFX_*;
-#   - publish, environment release-publish: QUICKPLAY_UPDATE_KEY, R2_*.
+#   - sign-manifest, environment release-manifest: QUICKPLAY_UPDATE_KEY;
+#   - publish, environment release-publish: R2_*.
 # Every other job, so every build script and every test, runs without them.
-# The tools those two jobs run (cargo-packager, rsign) are built by jobs that
+# The tools those jobs run (cargo-packager, rsign) are built by jobs that
 # build nothing else (tools-windows, tools-linux), so no build script of the
 # project's dependencies can swap them. The jobs that compile also drop the
 # variables, a guard against one scoped too widely.
@@ -333,43 +334,57 @@ tools-linux:
     paths: [tools/bin/]
     expire_in: 1 week
 
+# The packages of the three builds, gathered under dist/ by name.
+.gather-dist: &gather-dist
+  - mkdir -p dist
+  - cp target/packager/*.exe target/packager/*.deb target/packager/*.rpm target/packager/*.AppImage target/packager/*.dmg target/packager/SHA256SUMS-*.txt dist/
+
+# The update manifest, signed with the release key and pointing at R2. The
+# key's job does nothing else: Ubuntu's own jq, the rsign tools-linux built
+# and the script. The manifest goes on to publish as an artifact.
+sign-manifest:
+  extends: [.release-rules, .linux-medium]
+  stage: sign
+  image: ubuntu:24.04
+  needs: [sign-windows, release-linux, release-macos, tools-linux]
+  environment:
+    name: release-manifest
+  variables:
+    DEBIAN_FRONTEND: noninteractive
+  script:
+    - apt-get update && apt-get install -y --no-install-recommends jq
+    - export PATH="$CI_PROJECT_DIR/tools/bin:$PATH"
+    - rsign --version
+    - *gather-dist
+    - >-
+      UPDATE_KEY="$QUICKPLAY_UPDATE_KEY" VERSION="${CI_COMMIT_TAG#v}"
+      bash scripts/release/sign-manifest.sh dist "${R2_PUBLIC_URL%/}/quickplay/releases/$CI_COMMIT_TAG" dist/latest.json
+  artifacts:
+    paths: [dist/latest.json]
+    expire_in: 1 week
+
 # R2 is the only host here, so missing R2 variables fail the release instead
 # of skipping the copy as on GitHub. The GitLab release holds links, not
 # files: a project's storage quota would not take a set of packages per
-# version.
+# version. Only the R2 token is here, never the release key.
 publish:
   extends: [.release-rules, .linux-medium]
   stage: publish
   # One publish at a time: each reads the manifest on R2 before replacing it.
   resource_group: r2-quickplay
   image: ubuntu:24.04
-  needs: [sign-windows, release-linux, release-macos, tools-linux]
+  needs: [sign-windows, release-linux, release-macos, sign-manifest]
   environment:
     name: release-publish
   variables:
     DEBIAN_FRONTEND: noninteractive
   script:
-    # Nothing is compiled here; rsign comes from tools-linux. The release key
-    # and the R2 token still wait in shell variables, each given back to the
-    # one command that needs it.
-    - |
-      for v in QUICKPLAY_UPDATE_KEY R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_ACCOUNT_ID R2_BUCKET; do
-        eval "saved_$v=\${$v-}"
-      done
-    - *drop-secrets-bash
     - apt-get update && apt-get install -y --no-install-recommends ca-certificates curl unzip jq
     - curl -fsSL https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o awscliv2.zip
     - unzip -q awscliv2.zip && ./aws/install && rm -rf aws awscliv2.zip
-    - export PATH="$CI_PROJECT_DIR/tools/bin:$PATH"
-    - rsign --version
-    - export TAG_NAME="$CI_COMMIT_TAG" VERSION="${CI_COMMIT_TAG#v}"
-    - mkdir dist && cp target/packager/*.exe target/packager/*.deb target/packager/*.rpm target/packager/*.AppImage target/packager/*.dmg target/packager/SHA256SUMS-*.txt dist/
-    # The key reaches the signing alone, the R2 token the upload alone.
-    - UPDATE_KEY="$saved_QUICKPLAY_UPDATE_KEY" bash scripts/release/sign-manifest.sh dist "${R2_PUBLIC_URL%/}/quickplay/releases/$TAG_NAME" dist/latest.json
-    - |
-      for v in R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_ACCOUNT_ID R2_BUCKET; do
-        eval "export $v=\"\$saved_$v\""
-      done
+    - export TAG_NAME="$CI_COMMIT_TAG"
+    - *gather-dist
+    - test -f dist/latest.json
     - test "$(bash scripts/release/publish-r2.sh --check)" = configured || { echo "the four R2_* variables are required"; exit 1; }
     - bash scripts/release/publish-r2.sh dist dist/latest.json
     - |
