@@ -7,10 +7,12 @@
 //! closes: the next launch is the new version, and nothing that plays is
 //! cut.
 //!
-//! Keeping the newest answer is safe because the manifest is not trusted
-//! for the version: each package's signature names the version and the
-//! file it was signed for, so neither host, nor anyone answering in its
-//! place, can pass an older package off as a newer version.
+//! The manifest is not trusted for the version: each package's signature
+//! names the version and the file it was signed for, so neither host, nor
+//! anyone answering in its place, can pass an older package off as a newer
+//! version. A version no package backs is passed over for the next newest,
+//! so a host cannot hold updates back by announcing one that does not
+//! exist.
 //!
 //! Only the copies QuickPlay can replace by itself update this way: the
 //! Windows installer's (per user), an app bundle in a folder this user can
@@ -228,7 +230,8 @@ fn check(install: &Install) -> io::Result<Option<Found>> {
         return Err(last_error.unwrap_or_else(|| io::Error::other("no update host")));
     }
     let current = semver::Version::parse(env!("CARGO_PKG_VERSION")).map_err(invalid)?;
-    let Some((version, sources)) = newest(manifests, &current) else {
+    let offers = newer(manifests, &current);
+    let Some((newest, _)) = offers.first() else {
         // The installer of the update now running, which Windows could not
         // delete while it ran, goes.
         if let Some(dir) = cache_dir() {
@@ -236,35 +239,45 @@ fn check(install: &Install) -> io::Result<Option<Found>> {
         }
         return Ok(None);
     };
-    // The packages of this copy's platform, in the order of the hosts. A
-    // release without one (or a copy that takes none) only says that it is
-    // out.
-    let packages: Vec<&Package> = match install.platform() {
-        Some(p) => sources.iter().filter_map(|m| m.platforms.get(p)).collect(),
+    // The packages of this copy's platform: newest version first, and for
+    // one version in the order of the hosts. A release without one (or a
+    // copy that takes none) only says that it is out.
+    let candidates: Vec<(&str, &Package)> = match install.platform() {
+        Some(p) => offers
+            .iter()
+            .flat_map(|(v, sources)| {
+                sources
+                    .iter()
+                    .filter_map(move |m| Some((v.as_str(), m.platforms.get(p)?)))
+            })
+            .collect(),
         None => Vec::new(),
     };
-    if packages.is_empty() {
-        tracing::info!(%version, ?install, "a new version is available");
-        return Ok(Some(Found::Available(version)));
+    if candidates.is_empty() {
+        tracing::info!(version = %newest, ?install, "a new version is available");
+        return Ok(Some(Found::Available(newest.clone())));
     }
     let dir = cache_dir().ok_or_else(|| io::Error::other("no cache directory"))?;
     std::fs::create_dir_all(&dir)?;
-    let files: Vec<PathBuf> = packages
+    let files: Vec<PathBuf> = candidates
         .iter()
-        .filter_map(|p| file_name(&p.url))
+        .filter_map(|(_, p)| file_name(&p.url))
         .map(|name| dir.join(name))
         .collect();
     clear_cache(&dir, &files);
-    // The first host whose package downloads and verifies wins: a host
-    // that answers the small manifest but not the package leaves it to the
-    // other. An older version is never a fallback.
+    // The first package that downloads and verifies wins. A host that
+    // answers the small manifest but not the package leaves it to the other
+    // host. The version a manifest claims is not signed, only each package
+    // is: a version that no package backs is passed over for the next one,
+    // so a host announcing a version that does not exist cannot hold back
+    // a real one. Nothing older than this copy is ever offered.
     let mut last_error = None;
-    for package in packages {
-        match fetch_package(&client, &dir, package, &version) {
+    for (version, package) in candidates {
+        match fetch_package(&client, &dir, package, version) {
             Ok(file) => {
                 tracing::info!(%version, file = %file.display(), "update ready, installed on close");
                 return Ok(Some(Found::Ready(Update {
-                    version,
+                    version: version.to_string(),
                     file,
                     install: install.clone(),
                 })));
@@ -291,23 +304,28 @@ fn read_manifest(client: &reqwest::blocking::Client, url: &str) -> io::Result<Ma
     Ok(manifest)
 }
 
-/// The newest version the manifests offer, if newer than `current`, with
-/// every manifest that offers it, in the order they came.
-fn newest(manifests: Vec<Manifest>, current: &semver::Version) -> Option<(String, Vec<Manifest>)> {
-    let parsed: Vec<(semver::Version, Manifest)> = manifests
-        .into_iter()
-        .filter_map(|m| Some((semver::Version::parse(&m.version).ok()?, m)))
-        .collect();
-    let latest = parsed.iter().map(|(v, _)| v).max()?.clone();
-    if latest <= *current {
-        return None;
+/// The versions the manifests offer that are newer than `current`, newest
+/// first, each with every manifest that offers it, in the order they came.
+fn newer(manifests: Vec<Manifest>, current: &semver::Version) -> Vec<(String, Vec<Manifest>)> {
+    let mut offers: Vec<(semver::Version, Vec<Manifest>)> = Vec::new();
+    for manifest in manifests {
+        let Ok(version) = semver::Version::parse(&manifest.version) else {
+            continue;
+        };
+        if version <= *current {
+            continue;
+        }
+        match offers.iter_mut().find(|(v, _)| *v == version) {
+            Some((_, sources)) => sources.push(manifest),
+            None => offers.push((version, vec![manifest])),
+        }
     }
-    let sources: Vec<Manifest> = parsed
+    // Stable: the hosts keep their order within a version.
+    offers.sort_by(|(a, _), (b, _)| b.cmp(a));
+    offers
         .into_iter()
-        .filter(|(v, _)| *v == latest)
-        .map(|(_, m)| m)
-        .collect();
-    Some((latest.to_string(), sources))
+        .map(|(v, sources)| (v.to_string(), sources))
+        .collect()
 }
 
 /// The package in the cache, verified: already there from an earlier
@@ -627,61 +645,83 @@ trusted comment: waveflow-quickplay 1.2.3 test.bin
         }
     }
 
-    fn urls(sources: &[Manifest]) -> Vec<&str> {
-        sources
-            .iter()
-            .map(|m| m.platforms["windows-x86_64"].url.as_str())
+    /// `newer` as (version, package URLs) pairs, against `current`.
+    fn offers(manifests: Vec<Manifest>, current: (u64, u64, u64)) -> Vec<(String, Vec<String>)> {
+        let current = semver::Version::new(current.0, current.1, current.2);
+        newer(manifests, &current)
+            .into_iter()
+            .map(|(v, sources)| {
+                let urls = sources
+                    .iter()
+                    .map(|m| m.platforms["windows-x86_64"].url.clone())
+                    .collect();
+                (v, urls)
+            })
             .collect()
     }
 
-    /// A stale host does not hide a newer version the other one offers.
+    fn offer(version: &str, urls: &[&str]) -> (String, Vec<String>) {
+        (version.into(), urls.iter().map(|u| u.to_string()).collect())
+    }
+
+    /// A stale host does not hide a newer version the other one offers, and
+    /// the older one stays behind it in case no package backs the newer.
     #[test]
-    fn the_newest_host_wins() {
-        let current = semver::Version::new(1, 4, 0);
-        let (version, sources) = newest(
-            vec![manifest("1.5.0", "github"), manifest("1.6.0", "r2")],
-            &current,
-        )
-        .unwrap();
-        assert_eq!(version, "1.6.0");
-        assert_eq!(urls(&sources), ["r2"]);
+    fn the_newest_version_comes_first() {
+        assert_eq!(
+            offers(
+                vec![manifest("1.5.0", "github"), manifest("1.6.0", "r2")],
+                (1, 4, 0)
+            ),
+            [offer("1.6.0", &["r2"]), offer("1.5.0", &["github"])]
+        );
     }
 
     /// Both hosts offering the version are kept, in the order they were
     /// asked, so the second one's package is there if the first one's fails.
     #[test]
     fn hosts_that_agree_are_all_kept() {
-        let current = semver::Version::new(1, 4, 0);
-        let (version, sources) = newest(
-            vec![manifest("1.5.0", "github"), manifest("1.5.0", "r2")],
-            &current,
-        )
-        .unwrap();
-        assert_eq!(version, "1.5.0");
-        assert_eq!(urls(&sources), ["github", "r2"]);
+        assert_eq!(
+            offers(
+                vec![manifest("1.5.0", "github"), manifest("1.5.0", "r2")],
+                (1, 4, 0)
+            ),
+            [offer("1.5.0", &["github", "r2"])]
+        );
     }
 
     #[test]
     fn nothing_newer_is_no_update() {
-        let current = semver::Version::new(1, 5, 0);
-        assert!(newest(
+        assert!(offers(
             vec![manifest("1.5.0", "github"), manifest("1.4.0", "r2")],
-            &current
+            (1, 5, 0)
         )
-        .is_none());
-        assert!(newest(Vec::new(), &current).is_none());
+        .is_empty());
+        assert!(offers(Vec::new(), (1, 5, 0)).is_empty());
+    }
+
+    /// Only versions newer than this copy are offered, whatever a host
+    /// claims besides.
+    #[test]
+    fn older_versions_are_never_offered() {
+        assert_eq!(
+            offers(
+                vec![manifest("99.0.0", "github"), manifest("1.3.0", "r2")],
+                (1, 4, 0)
+            ),
+            [offer("99.0.0", &["github"])]
+        );
     }
 
     #[test]
     fn a_manifest_without_a_version_is_left_out() {
-        let current = semver::Version::new(1, 4, 0);
-        let (version, sources) = newest(
-            vec![manifest("latest", "github"), manifest("1.5.0", "r2")],
-            &current,
-        )
-        .unwrap();
-        assert_eq!(version, "1.5.0");
-        assert_eq!(urls(&sources), ["r2"]);
+        assert_eq!(
+            offers(
+                vec![manifest("latest", "github"), manifest("1.5.0", "r2")],
+                (1, 4, 0)
+            ),
+            [offer("1.5.0", &["r2"])]
+        );
     }
 
     /// The R2 copy is the one that outlives the GitHub account; the release

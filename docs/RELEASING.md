@@ -122,7 +122,11 @@ cover a release or two at most. Otherwise register a runner of your own:
 Settings → CI/CD → Variables. Mark them **protected** and protect the `v*`
 tags (Settings → Repository → Protected tags): a protected variable is
 given only to pipelines of protected refs. Mask what GitLab accepts to
-mask.
+mask. GitLab then gives every variable to every job of those pipelines,
+where GitHub hands a secret only to the step that names it: each job that
+compiles drops them first (`.drop-secrets-bash`, and the `before_script` of
+`.rust-windows`), so no build script or test sees them. Keep it that way
+in any job added.
 
 | Variable                                                                 | Notes                                                       |
 | ------------------------------------------------------------------------ | ----------------------------------------------------------- |

@@ -319,9 +319,11 @@ latest GitHub release, and its copy on WaveFlow's R2 bucket
 updates working if the GitHub account goes ([RELEASING.md](RELEASING.md)).
 Each manifest gets 30 seconds; a host that fails in any way (an error, a
 page that is not a manifest, a stale version) hides nothing the other one
-offers, and only both failing is an error. The newest version either
-offers wins; when both offer it, GitHub's package is tried first and R2's
-if it cannot be downloaded or does not verify. The
+offers, and only both failing is an error. The versions newer than this
+copy are tried newest first; for one version GitHub's package comes first,
+R2's if it cannot be downloaded or does not verify. A version whose
+packages all fail is passed over for the next, so a host announcing a
+version that does not exist cannot hold back a real one. The
 manifest gives the version and, per package QuickPlay can install by
 itself, its URL and its minisign signature: `windows-x86_64` (the NSIS
 installer), `darwin-universal` (the disk image) and

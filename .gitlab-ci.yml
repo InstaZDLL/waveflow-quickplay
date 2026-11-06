@@ -66,6 +66,15 @@ variables:
 .linux-medium:
   tags: [saas-linux-medium-amd64]
 
+# GitLab gives every project variable to every job of a protected ref, where
+# GitHub hands a secret only to the step that names it. So a job that
+# compiles drops the secrets before anything else runs: no build script of
+# any dependency, nor a test, sees the release key, the certificate or the
+# R2 token. The jobs that need one keep it in a shell variable, which is not
+# passed on to the programs the shell starts.
+.drop-secrets-bash: &drop-secrets-bash
+  - unset QUICKPLAY_UPDATE_KEY SIGNTOOL_PFX_BASE64 SIGNTOOL_PFX_PASSWORD R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_ACCOUNT_ID R2_BUCKET
+
 # The compiler comes from rust-toolchain.toml: rustup is installed with no
 # default toolchain, and `rustup toolchain install` with no argument reads
 # the file.
@@ -77,7 +86,11 @@ variables:
 
 .rust-windows:
   tags: [saas-windows-medium-amd64]
+  # before_script and script run in one PowerShell session: the certificate
+  # stays in $pfxBase64 and $pfxPassword, which no child process inherits.
   before_script:
+    - $pfxBase64 = $env:SIGNTOOL_PFX_BASE64; $pfxPassword = $env:SIGNTOOL_PFX_PASSWORD
+    - foreach ($v in 'QUICKPLAY_UPDATE_KEY', 'SIGNTOOL_PFX_BASE64', 'SIGNTOOL_PFX_PASSWORD', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'R2_ACCOUNT_ID', 'R2_BUCKET') { Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
     - $ProgressPreference = 'SilentlyContinue'
     - Invoke-WebRequest https://win.rustup.rs/x86_64 -OutFile rustup-init.exe
     - .\rustup-init.exe -y --profile minimal --default-toolchain none
@@ -103,6 +116,7 @@ rust-linux:
   variables:
     DEBIAN_FRONTEND: noninteractive
   script:
+    - *drop-secrets-bash
     - *linux-deps
     - *rustup-bash
     - cargo fmt --all --check
@@ -144,10 +158,10 @@ release-windows:
     # Authenticode, as release.yml does it: the certificate into the user's
     # store, cargo-packager signing by its thumbprint. The thumbprint is
     # written down for after_script, which runs in a shell of its own.
-    - if (-not $env:SIGNTOOL_PFX_BASE64 -or -not $env:SIGNTOOL_PFX_PASSWORD) { Write-Error "SIGNTOOL_PFX_BASE64 and SIGNTOOL_PFX_PASSWORD are required to publish a release"; exit 1 }
+    - if (-not $pfxBase64 -or -not $pfxPassword) { Write-Error "SIGNTOOL_PFX_BASE64 and SIGNTOOL_PFX_PASSWORD are required to publish a release"; exit 1 }
     - $pfx = Join-Path $env:CI_PROJECT_DIR "signing.pfx"
-    - "[IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:SIGNTOOL_PFX_BASE64))"
-    - $password = ConvertTo-SecureString $env:SIGNTOOL_PFX_PASSWORD -AsPlainText -Force
+    - "[IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($pfxBase64))"
+    - $password = ConvertTo-SecureString $pfxPassword -AsPlainText -Force
     - $cert = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $password
     - Remove-Item $pfx
     - $thumbprint = $cert.Thumbprint
@@ -190,6 +204,7 @@ release-linux:
     # linuxdeploy and appimagetool are AppImages themselves; no FUSE here.
     APPIMAGE_EXTRACT_AND_RUN: "1"
   script:
+    - *drop-secrets-bash
     - *linux-deps
     - apt-get install -y --no-install-recommends libfuse2 file rpm binutils
     - *rustup-bash
@@ -238,6 +253,7 @@ release-macos:
   variables:
     MACOSX_DEPLOYMENT_TARGET: "11.0"
   script:
+    - *drop-secrets-bash
     - *rustup-bash
     - rustup target add aarch64-apple-darwin x86_64-apple-darwin
     - cmake --version || brew install cmake
@@ -275,16 +291,26 @@ publish:
   variables:
     DEBIAN_FRONTEND: noninteractive
   script:
+    # The release key and the R2 token wait in shell variables while the
+    # tools are installed and rsign2 is compiled, then come back.
+    - |
+      for v in QUICKPLAY_UPDATE_KEY R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_ACCOUNT_ID R2_BUCKET; do
+        eval "saved_$v=\${$v-}"
+      done
+    - *drop-secrets-bash
     - apt-get update && apt-get install -y --no-install-recommends ca-certificates curl unzip jq build-essential
     - curl -fsSL https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o awscliv2.zip
     - unzip -q awscliv2.zip && ./aws/install && rm -rf aws awscliv2.zip
     - *rustup-bash
-    # Built before the key is read, as in release.yml.
     - cargo install rsign2 --version "$RSIGN_VERSION" --locked
+    - |
+      for v in R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_ACCOUNT_ID R2_BUCKET; do
+        eval "export $v=\"\$saved_$v\""
+      done
     - export TAG_NAME="$CI_COMMIT_TAG" VERSION="${CI_COMMIT_TAG#v}"
     - test "$(bash scripts/release/publish-r2.sh --check)" = configured || { echo "the four R2_* variables are required"; exit 1; }
     - mkdir dist && cp target/packager/*.exe target/packager/*.deb target/packager/*.rpm target/packager/*.AppImage target/packager/*.dmg target/packager/SHA256SUMS-*.txt dist/
-    - UPDATE_KEY="$QUICKPLAY_UPDATE_KEY" bash scripts/release/sign-manifest.sh dist "${R2_PUBLIC_URL%/}/quickplay/releases/$TAG_NAME" dist/latest.json
+    - UPDATE_KEY="$saved_QUICKPLAY_UPDATE_KEY" bash scripts/release/sign-manifest.sh dist "${R2_PUBLIC_URL%/}/quickplay/releases/$TAG_NAME" dist/latest.json
     - bash scripts/release/publish-r2.sh dist dist/latest.json
     - |
       base="${R2_PUBLIC_URL%/}/quickplay/releases/$TAG_NAME"
