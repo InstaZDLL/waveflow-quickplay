@@ -12,7 +12,7 @@ release with its update manifest, and copies the whole release to R2.
 | `QUICKPLAY_UPDATE_KEY`                         | the release key: the rsign secret key file, without a password. Its public half is `PUBLIC_KEY` in `src/update.rs` |
 | `SIGNTOOL_PFX_BASE64`, `SIGNTOOL_PFX_PASSWORD` | WaveFlow's Authenticode certificate, the same two secrets as the WaveFlow repository          |
 | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`     | an R2 API token with Object Read & Write on WaveFlow's bucket; the same token WaveFlow uses   |
-| `R2_ACCOUNT_ID`, `R2_BUCKET`                   | the Cloudflare account id and the bucket's name (`waveflow-releases`)                         |
+| `R2_ACCOUNT_ID`, `R2_BUCKET`                   | the Cloudflare account id (or its S3 endpoint, `https://<id>.r2.cloudflarestorage.com`) and the bucket's name (`waveflow-releases`) |
 
 The four `R2_*` secrets are optional on GitHub: with none of them the
 `Copy to R2` job ends green after saying so, with only some of them it

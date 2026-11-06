@@ -21,7 +21,8 @@
 #
 # Environment:
 #   R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY  an R2 API token's S3 keys
-#   R2_ACCOUNT_ID                          the Cloudflare account id
+#   R2_ACCOUNT_ID                          the Cloudflare account id, or its
+#                                          S3 endpoint
 #   R2_BUCKET                              the bucket's name
 #   R2_PUBLIC_URL   the bucket's public domain, as compiled into the app
 #                   (default https://download.waveflow.app)
@@ -75,6 +76,18 @@ if [ "$state" = "absent" ]; then
   # A dry run needs names to print, not credentials.
   R2_ACCOUNT_ID="<account-id>"
   R2_BUCKET="<bucket>"
+else
+  # The account id, or the S3 endpoint the dashboard shows right beside it,
+  # https://<id>.r2.cloudflarestorage.com: a secret set to the second once
+  # made the upload fail on DNS, at https://https://…, with nothing saying
+  # why. Anything else is refused by name.
+  account="${R2_ACCOUNT_ID#https://}"
+  account="${account%%.*}"
+  if ! [[ "$account" =~ ^[0-9a-f]{32}$ ]]; then
+    echo "::error::R2_ACCOUNT_ID is neither an account id nor https://<id>.r2.cloudflarestorage.com" >&2
+    exit 1
+  fi
+  R2_ACCOUNT_ID="$account"
 fi
 
 public="${R2_PUBLIC_URL:-https://download.waveflow.app}"
