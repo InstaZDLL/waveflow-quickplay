@@ -92,6 +92,12 @@ than the files.
   ```
 
 - The R2 copy of every release, which the 1.5.0+ builds already read.
+- WaveFlow's own copy, the project named "WaveFlow" at
+  [`waveflow-groupe/WaveFlow-projet`](https://gitlab.com/waveflow-groupe/WaveFlow-projet)
+  (its path kept the old name; the path is what a URL uses).
+  `waveflow-core` is a git dependency pinned to a WaveFlow commit
+  (`Cargo.toml`): without GitHub, cargo finds that commit only there, so
+  the `rev` a QuickPlay release pins must have been pushed to it.
 
 ### Before anything happens
 
@@ -101,10 +107,6 @@ Some of it needs GitHub to still answer:
   GitLab, New project → Import project → GitHub, into a separate project
   (the importer wants an empty one), with your GitHub token. It reads
   GitHub's API, so it cannot run after the account is gone.
-- **Keep WaveFlow's history on GitLab too.** `waveflow-core` is a git
-  dependency pinned to a WaveFlow commit (`Cargo.toml`): without GitHub,
-  cargo finds that commit only in a copy of the WaveFlow repository that
-  has it, `waveflow-groupe/WaveFlow-projet`.
 - Keep a local clone with every tag.
 
 ### Runners
@@ -140,7 +142,7 @@ in any job added.
 
 | On GitHub                          | On GitLab                                                                                                                                                                      |
 | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `waveflow-core` from GitHub        | Point `git =` in `Cargo.toml` at the GitLab copy of WaveFlow and run `cargo update -p waveflow-core` (the `rev` stays). A private project also needs this project in its CI/CD job token allowlist, and `CARGO_NET_GIT_FETCH_WITH_CLI=true` with a `url.<…>.insteadOf` that puts `CI_JOB_TOKEN` in the URL; a public one needs neither. |
+| `waveflow-core` from GitHub        | Point `git =` in `Cargo.toml` at `https://gitlab.com/waveflow-groupe/WaveFlow-projet` and run `cargo update -p waveflow-core` (the `rev` stays). A private project also needs this project in its CI/CD job token allowlist, and `CARGO_NET_GIT_FETCH_WITH_CLI=true` with a `url.<…>.insteadOf` that puts `CI_JOB_TOKEN` in the URL; a public one needs neither. |
 | Dependabot, CodeRabbit, PR labels  | Not ported. Renovate is the nearest replacement for updates.                                                                                                                   |
 | Release notes and update link      | The settings' "what's new" link (`RELEASE_PAGE` in `src/update.rs`) and the repository link (`REPOSITORY` in `src/ui/settings.rs`) name GitHub: change them in the next release. |
 | Install links                      | The README and waveflow.app link to GitHub releases: point them at `https://download.waveflow.app/quickplay/releases/<tag>/`.                                                  |
