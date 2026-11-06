@@ -127,7 +127,9 @@ mask. GitLab then gives every variable to every job of those pipelines,
 where GitHub hands a secret only to the step that names it: each job that
 compiles drops them first (`.drop-secrets-bash`, and the `before_script` of
 `.rust-windows`), so no build script or test sees them. Keep it that way
-in any job added.
+in any job added. Give each one the type **Variable**, not File: GitLab
+writes a File variable's value to a temporary file, which dropping the
+variable does not remove and a build script could read.
 
 | Variable                                                                 | Notes                                                       |
 | ------------------------------------------------------------------------ | ----------------------------------------------------------- |

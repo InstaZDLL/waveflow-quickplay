@@ -29,7 +29,11 @@
 #   R2_DRY_RUN=1    touch no network: print the uploads, write the manifest
 #                   to R2_DRY_RUN_OUT (default r2-latest.json)
 #   R2_FORCE=1      replace the manifest even when the one published is
-#                   newer (a deliberate rollback)
+#                   newer (a deliberate rollback), or the same version for
+#                   more platforms
+#
+# A pre-release tag (v1.5.0-beta.1) has its files copied, never its
+# manifest.
 #
 # None of the four R2_* secrets set means no copy: the script says so and
 # succeeds, so a fork still releases. Some but not all of them is an error.
@@ -136,6 +140,14 @@ if [ "$uploaded" -eq 0 ]; then
 fi
 echo "Uploaded $uploaded files to $prefix/."
 
+# QuickPlay has one channel, and latest.json is what every copy installs
+# from: a pre-release (1.5.0-beta.1) is copied but never offered.
+semver='^[0-9]+\.[0-9]+\.[0-9]+$'
+if ! [[ "$version" =~ $semver ]]; then
+  echo "::notice::$version is a pre-release: its files are under $prefix/, $channel is left as it is"
+  exit 0
+fi
+
 if [ "$dry_run" != "1" ]; then
   # Through the public domain, as a client will ask: the S3 API accepting a
   # file says nothing about the domain serving it. The query string is a
@@ -162,8 +174,7 @@ if [ "$dry_run" != "1" ]; then
     case "$code" in
       200)
         published="$(jq -r '.version // empty' "$work/current.json" 2>/dev/null || true)"
-        semver='^[0-9]+\.[0-9]+\.[0-9]+$'
-        if ! [[ "$published" =~ $semver && "$version" =~ $semver ]]; then
+        if ! [[ "$published" =~ $semver ]]; then
           echo "::error::cannot compare the published ${published:-manifest} with $version; set R2_FORCE=1 to replace it" >&2
           exit 1
         fi
@@ -171,6 +182,17 @@ if [ "$dry_run" != "1" ]; then
         if [ "$published" != "$version" ] && [ "$newest" = "$published" ]; then
           echo "::warning::$channel already offers $published, newer than $version: left in place (the files stay under $prefix/)"
           exit 0
+        fi
+        # The same version with fewer platforms (a Linux-only rebuild that
+        # found no manifest to start from) would take the update away from
+        # the copies of the platforms it lacks.
+        if [ "$published" = "$version" ]; then
+          missing="$(jq -r --slurpfile new "$work/latest.json" \
+            '(.platforms | keys) - ($new[0].platforms | keys) | join(", ")' "$work/current.json")"
+          if [ -n "$missing" ]; then
+            echo "::error::$channel offers $version for $missing too, which this manifest lacks; set R2_FORCE=1 to replace it" >&2
+            exit 1
+          fi
         fi
         ;;
       404) ;; # the first manifest

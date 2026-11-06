@@ -200,11 +200,24 @@ pub fn spawn_check(notify: impl Fn() + Send + 'static) -> mpsc::Receiver<Found> 
 }
 
 fn check(install: &Install) -> io::Result<Option<Found>> {
-    // A test manifest replaces both hosts.
+    // A test manifest replaces both hosts, in any build.
     let urls = match std::env::var("QUICKPLAY_UPDATE_URL") {
         Ok(url) => vec![url],
         Err(_) => MANIFEST_URLS.iter().map(|u| u.to_string()).collect(),
     };
+    let current = semver::Version::parse(env!("CARGO_PKG_VERSION")).map_err(invalid)?;
+    check_at(&urls, PUBLIC_KEY, &current, install, cache_dir())
+}
+
+/// [`check`] against `urls`, for packages signed with `key`, from a copy at
+/// version `current` that caches in `dir`.
+fn check_at(
+    urls: &[String],
+    key: &str,
+    current: &semver::Version,
+    install: &Install,
+    dir: Option<PathBuf>,
+) -> io::Result<Option<Found>> {
     let client = reqwest::blocking::Client::builder()
         .user_agent(concat!("waveflow-quickplay/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(Duration::from_secs(10))
@@ -217,7 +230,7 @@ fn check(install: &Install) -> io::Result<Option<Found>> {
     // error.
     let mut manifests = Vec::new();
     let mut last_error = None;
-    for url in &urls {
+    for url in urls {
         match read_manifest(&client, url) {
             Ok(manifest) => manifests.push(manifest),
             Err(e) => {
@@ -229,13 +242,12 @@ fn check(install: &Install) -> io::Result<Option<Found>> {
     if manifests.is_empty() {
         return Err(last_error.unwrap_or_else(|| io::Error::other("no update host")));
     }
-    let current = semver::Version::parse(env!("CARGO_PKG_VERSION")).map_err(invalid)?;
-    let offers = newer(manifests, &current);
+    let offers = newer(manifests, current);
     let Some((newest, _)) = offers.first() else {
         // The installer of the update now running, which Windows could not
         // delete while it ran, goes.
-        if let Some(dir) = cache_dir() {
-            clear_cache(&dir, &[]);
+        if let Some(dir) = &dir {
+            clear_cache(dir, &[]);
         }
         return Ok(None);
     };
@@ -257,7 +269,7 @@ fn check(install: &Install) -> io::Result<Option<Found>> {
         tracing::info!(version = %newest, ?install, "a new version is available");
         return Ok(Some(Found::Available(newest.clone())));
     }
-    let dir = cache_dir().ok_or_else(|| io::Error::other("no cache directory"))?;
+    let dir = dir.ok_or_else(|| io::Error::other("no cache directory"))?;
     std::fs::create_dir_all(&dir)?;
     let files: Vec<PathBuf> = candidates
         .iter()
@@ -273,7 +285,7 @@ fn check(install: &Install) -> io::Result<Option<Found>> {
     // a real one. Nothing older than this copy is ever offered.
     let mut last_error = None;
     for (version, package) in candidates {
-        match fetch_package(&client, &dir, package, version) {
+        match fetch_package(&client, key, &dir, package, version) {
             Ok(file) => {
                 tracing::info!(%version, file = %file.display(), "update ready, installed on close");
                 return Ok(Some(Found::Ready(Update {
@@ -332,6 +344,7 @@ fn newer(manifests: Vec<Manifest>, current: &semver::Version) -> Vec<(String, Ve
 /// launch that closed before installing it, or downloaded now.
 fn fetch_package(
     client: &reqwest::blocking::Client,
+    key: &str,
     dir: &Path,
     package: &Package,
     version: &str,
@@ -342,11 +355,11 @@ fn fetch_package(
     let cached = std::fs::File::open(&file)
         .and_then(|f| read_at_most(f, MAX_PACKAGE, "the cached package"))
         .ok()
-        .filter(|bytes| verify(PUBLIC_KEY, bytes, &package.signature, version, name).is_ok());
+        .filter(|bytes| verify(key, bytes, &package.signature, version, name).is_ok());
     if cached.is_none() {
         tracing::info!(%version, url = %package.url, "downloading the update");
         let bytes = download(client, &package.url, MAX_PACKAGE)?;
-        verify(PUBLIC_KEY, &bytes, &package.signature, version, name)?;
+        verify(key, &bytes, &package.signature, version, name)?;
         let partial = file.with_extension("part");
         std::fs::write(&partial, &bytes)?;
         std::fs::rename(&partial, &file)?;
@@ -722,6 +735,153 @@ trusted comment: waveflow-quickplay 1.2.3 test.bin
             ),
             [offer("1.5.0", &["r2"])]
         );
+    }
+
+    /// A local HTTP server on `listener` answering `routes` (path, status,
+    /// body), 404 elsewhere, until the test process ends.
+    fn serve(listener: std::net::TcpListener, routes: Vec<(String, u16, Vec<u8>)>) {
+        use std::io::{BufRead, Write};
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let mut reader = io::BufReader::new(stream.try_clone().unwrap());
+                let mut request = String::new();
+                if reader.read_line(&mut request).is_err() {
+                    continue;
+                }
+                // The headers, up to the blank line.
+                let mut header = String::new();
+                while reader.read_line(&mut header).is_ok_and(|n| n > 2) {
+                    header.clear();
+                }
+                let path = request.split_whitespace().nth(1).unwrap_or_default();
+                let (status, body) = routes
+                    .iter()
+                    .find(|(p, ..)| p == path)
+                    .map(|(_, s, b)| (*s, b.as_slice()))
+                    .unwrap_or((404, b""));
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 {status} X\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(body);
+            }
+        });
+    }
+
+    /// A manifest offering `version` for Windows at `url`, signed by the
+    /// test key for 1.2.3 under the name test.bin.
+    fn manifest_json(version: &str, url: &str) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "version": version,
+            "platforms": { "windows-x86_64": { "url": url, "signature": TEST_SIGNATURE } }
+        }))
+        .unwrap()
+    }
+
+    fn route(path: &str, status: u16, body: &[u8]) -> (String, u16, Vec<u8>) {
+        (path.into(), status, body.to_vec())
+    }
+
+    /// What `check_at` finds from a 1.0.0 Windows copy, against the two
+    /// manifests the server has at /a and /b, with a cache of its own: the
+    /// version and the bytes of the package it made ready.
+    fn check_two_hosts(
+        test: &str,
+        routes: impl Fn(&str) -> Vec<(String, u16, Vec<u8>)>,
+    ) -> io::Result<(String, Vec<u8>)> {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        serve(listener, routes(&base));
+        let dir =
+            std::env::temp_dir().join(format!("quickplay-update-{test}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let found = check_at(
+            &[
+                format!("{base}/a/latest.json"),
+                format!("{base}/b/latest.json"),
+            ],
+            TEST_KEY,
+            &semver::Version::new(1, 0, 0),
+            &Install::Windows,
+            Some(dir.clone()),
+        )
+        .map(|found| match found {
+            Some(Found::Ready(update)) => {
+                let bytes = std::fs::read(&update.file).unwrap();
+                (update.version, bytes)
+            }
+            _ => panic!("no update ready"),
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+        found
+    }
+
+    #[test]
+    fn a_host_that_fails_leaves_it_to_the_other() {
+        let found = check_two_hosts("manifest", |base| {
+            vec![
+                route("/a/latest.json", 200, b"<html>account suspended</html>"),
+                route(
+                    "/b/latest.json",
+                    200,
+                    &manifest_json("1.2.3", &format!("{base}/b/test.bin")),
+                ),
+                route("/b/test.bin", 200, TEST_PACKAGE),
+            ]
+        });
+        assert_eq!(found.unwrap(), ("1.2.3".into(), TEST_PACKAGE.to_vec()));
+    }
+
+    #[test]
+    fn a_package_that_fails_leaves_it_to_the_other_host() {
+        let found = check_two_hosts("package", |base| {
+            vec![
+                route(
+                    "/a/latest.json",
+                    200,
+                    &manifest_json("1.2.3", &format!("{base}/a/test.bin")),
+                ),
+                route("/a/test.bin", 500, b""),
+                route(
+                    "/b/latest.json",
+                    200,
+                    &manifest_json("1.2.3", &format!("{base}/b/test.bin")),
+                ),
+                route("/b/test.bin", 200, TEST_PACKAGE),
+            ]
+        });
+        assert_eq!(found.unwrap(), ("1.2.3".into(), TEST_PACKAGE.to_vec()));
+    }
+
+    /// A host announcing 9.9.9 over a package signed for 1.2.3 does not keep
+    /// the real 1.2.3 from being installed.
+    #[test]
+    fn a_version_no_package_backs_is_passed_over() {
+        let found = check_two_hosts("fake", |base| {
+            vec![
+                route(
+                    "/a/latest.json",
+                    200,
+                    &manifest_json("9.9.9", &format!("{base}/a/test.bin")),
+                ),
+                route("/a/test.bin", 200, TEST_PACKAGE),
+                route(
+                    "/b/latest.json",
+                    200,
+                    &manifest_json("1.2.3", &format!("{base}/b/test.bin")),
+                ),
+                route("/b/test.bin", 200, TEST_PACKAGE),
+            ]
+        });
+        assert_eq!(found.unwrap(), ("1.2.3".into(), TEST_PACKAGE.to_vec()));
+    }
+
+    #[test]
+    fn every_host_failing_is_an_error() {
+        let found = check_two_hosts("down", |_| vec![route("/a/latest.json", 503, b"")]);
+        assert!(found.is_err());
     }
 
     /// The R2 copy is the one that outlives the GitHub account; the release

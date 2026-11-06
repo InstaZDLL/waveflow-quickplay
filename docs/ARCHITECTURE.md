@@ -359,7 +359,8 @@ The package is downloaded to `<cache dir>/waveflow-quickplay/updates`,
 verified before it is kept, and verified again when a later launch finds it
 there instead of downloading it again (a restart for the pin closes without
 installing). A debug build looks only when `QUICKPLAY_UPDATE_URL` names a
-manifest to test with. A restart for the pin starts the AppImage again
+manifest to test with. In any build, that variable replaces both hosts:
+only its manifest is read, with no second host to fall back on. A restart for the pin starts the AppImage again
 rather than the executable inside it, whose mount goes away with the
 process that is closing.
 
