@@ -136,11 +136,13 @@ rust-linux:
     - cargo clippy --all-targets --locked -- -D warnings
     - cargo test --locked
 
+# The hosted Windows runner has 2 vCPU: clippy alone takes about 25 minutes
+# from a cold start, the test build as long again.
 rust-windows:
   extends: [.ci-rules, .rust-windows]
   stage: check
   interruptible: true
-  timeout: 1h
+  timeout: 2h
   script:
     - cargo clippy --all-targets --locked -- -D warnings
     - cargo test --locked
@@ -162,18 +164,19 @@ tools-windows:
   extends: [.release-rules, .rust-windows]
   stage: build
   needs: [version]
-  timeout: 1h
+  timeout: 2h
   script:
     - cargo install cargo-packager --version "$env:CARGO_PACKAGER_VERSION" --locked --root "$env:CI_PROJECT_DIR\tools"
   artifacts:
     paths: [tools/bin/]
     expire_in: 1 week
 
+# Two full builds (tests, then release) on the 2-vCPU runner.
 release-windows:
   extends: [.release-rules, .rust-windows]
   stage: build
   needs: [version]
-  timeout: 2h
+  timeout: 3h
   script:
     - cargo test --locked
     - cargo build --release --locked
