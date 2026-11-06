@@ -123,27 +123,33 @@ cover a release or two at most. Otherwise register a runner of your own:
 Settings → CI/CD → Variables. Mark them **protected** and protect the `v*`
 tags (Settings → Repository → Protected tags): a protected variable is
 given only to pipelines of protected refs. Mask what GitLab accepts to
-mask. GitLab then gives every variable to every job of those pipelines,
-where GitHub hands a secret only to the step that names it: each job that
-compiles drops them first (`.drop-secrets-bash`, and the `before_script` of
-`.rust-windows`), so no build script or test sees them. Keep it that way
-in any job added. Give each one the type **Variable**, not File: GitLab
-writes a File variable's value to a temporary file, which dropping the
-variable does not remove and a build script could read.
+mask, and give each one the type **Variable**, not File.
 
-| Variable                                                                 | Notes                                                       |
-| ------------------------------------------------------------------------ | ----------------------------------------------------------- |
-| `QUICKPLAY_UPDATE_KEY`                                                   | the same key: installed copies trust only its public half   |
-| `SIGNTOOL_PFX_BASE64`, `SIGNTOOL_PFX_PASSWORD`                           | the same certificate                                        |
-| `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_ACCOUNT_ID`, `R2_BUCKET` | **required** here: R2 is the only host                      |
-| `R2_PUBLIC_URL`                                                          | only if the domain is not `https://download.waveflow.app`   |
-| `MACOS_RUNNER_TAG`                                                       | the tag of your own Mac runner, if not the hosted one       |
+**Set each secret's environment scope** as the table says. GitHub hands a
+secret only to the step that names it; GitLab gives a variable to the whole
+job, and a shell runner writes the job's variables into the script file it
+runs, where any program of the job can read them, whatever the job does
+with them afterwards. A scoped variable reaches only the jobs that name its
+environment: `sign-windows` and `publish`, which compile nothing and run
+tools built by jobs of their own (`tools-windows`, `tools-linux`). No build
+script and no test ever runs in a job that has a secret. A secret left at
+the default scope, `*`, undoes that: keep the scopes, and keep any job added
+that compiles out of those two environments. The two environments show up
+under Operate → Environments once a release has run.
+
+| Variable                                                                 | Environment scope | Notes                                                     |
+| ------------------------------------------------------------------------ | ----------------- | --------------------------------------------------------- |
+| `QUICKPLAY_UPDATE_KEY`                                                   | `release-publish` | the same key: installed copies trust only its public half |
+| `SIGNTOOL_PFX_BASE64`, `SIGNTOOL_PFX_PASSWORD`                           | `release-signing` | the same certificate                                      |
+| `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_ACCOUNT_ID`, `R2_BUCKET` | `release-publish` | **required** here: R2 is the only host                    |
+| `R2_PUBLIC_URL`                                                          | `*`               | only if the domain is not `https://download.waveflow.app` |
+| `MACOS_RUNNER_TAG`                                                       | `*`               | the tag of your own Mac runner, if not the hosted one     |
 
 ### What does not carry over
 
 | On GitHub                          | On GitLab                                                                                                                                                                      |
 | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `waveflow-core` from GitHub        | Point `git =` in `Cargo.toml` at `https://gitlab.com/waveflow-groupe/WaveFlow` and run `cargo update -p waveflow-core` (the `rev` stays). A private project also needs this project in its CI/CD job token allowlist, and `CARGO_NET_GIT_FETCH_WITH_CLI=true` with a `url.<…>.insteadOf` that puts `CI_JOB_TOKEN` in the URL; a public one needs neither. |
+| `waveflow-core` from GitHub        | Point `git =` in `Cargo.toml` at `https://gitlab.com/waveflow-groupe/WaveFlow` and run `cargo update -p waveflow-core` (the `rev` stays). If WaveFlow's project is private, three things: this project in its CI/CD job token allowlist; read access to it (Reporter or more) for every user who runs a pipeline here, since the job token acts with that user's rights and the allowlist alone does not grant them; and `CARGO_NET_GIT_FETCH_WITH_CLI=true` with a `url.<…>.insteadOf` that puts `CI_JOB_TOKEN` in the URL. A public project needs none of it. |
 | Dependabot, CodeRabbit, PR labels  | Not ported. Renovate is the nearest replacement for updates.                                                                                                                   |
 | Release notes and update link      | The settings' "what's new" link (`RELEASE_PAGE` in `src/update.rs`) and the repository link (`REPOSITORY` in `src/ui/settings.rs`) name GitHub: change them in the next release. |
 | Install links                      | The README and waveflow.app link to GitHub releases: point them at `https://download.waveflow.app/quickplay/releases/<tag>/`.                                                  |
@@ -156,7 +162,7 @@ variable does not remove and a build script could read.
    its own.
 2. Point `waveflow-core` at GitLab (above), check that the pipeline of
    `main` runs green.
-3. Create the variables and protect the `v*` tags; register runners if the
+3. Create the variables with their environment scopes and protect the `v*` tags; register runners if the
    tier needs them.
 4. Release as usual, with the tag pushed to GitLab. Its manifest replaces
    `quickplay/latest.json` on R2, and every 1.5.0+ copy sees it.

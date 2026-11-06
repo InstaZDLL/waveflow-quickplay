@@ -13,7 +13,8 @@
 #     once GitHub is gone (src/update.rs), and as a GitLab release whose
 #     files are links there.
 #
-# Each job follows the release.yml job of the same name: change both
+# Each job follows the release.yml job it is named after (the Windows one
+# is split in three: tools-windows, release-windows, sign-windows): change both
 # together. The update manifest is signed by scripts/release/sign-manifest.sh
 # and copied by scripts/release/publish-r2.sh, which release.yml runs too.
 # The difference is where the manifest points: on GitHub at the release
@@ -40,6 +41,7 @@ workflow:
 stages:
   - check
   - build
+  - sign
   - publish
 
 variables:
@@ -66,12 +68,19 @@ variables:
 .linux-medium:
   tags: [saas-linux-medium-amd64]
 
-# GitLab gives every project variable to every job of a protected ref, where
-# GitHub hands a secret only to the step that names it. So a job that
-# compiles drops the secrets before anything else runs: no build script of
-# any dependency, nor a test, sees the release key, the certificate or the
-# R2 token. The jobs that need one keep it in a shell variable, which is not
-# passed on to the programs the shell starts.
+# Secrets. GitHub hands a secret only to the step that names it; GitLab gives
+# a variable to the whole job, and a shell runner writes the job's variables
+# into the script file it runs, where any program of the job can read them.
+# So the secrets are scoped to two GitLab environments
+# (docs/RELEASING.md#variables-to-create), and only two jobs, which compile
+# nothing, name one:
+#   - sign-windows, environment release-signing: SIGNTOOL_PFX_*;
+#   - publish, environment release-publish: QUICKPLAY_UPDATE_KEY, R2_*.
+# Every other job, so every build script and every test, runs without them.
+# The tools those two jobs run (cargo-packager, rsign) are built by jobs that
+# build nothing else (tools-windows, tools-linux), so no build script of the
+# project's dependencies can swap them. The jobs that compile also drop the
+# variables, a guard against one scoped too widely.
 .drop-secrets-bash: &drop-secrets-bash
   - unset QUICKPLAY_UPDATE_KEY SIGNTOOL_PFX_BASE64 SIGNTOOL_PFX_PASSWORD R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_ACCOUNT_ID R2_BUCKET
 
@@ -84,19 +93,19 @@ variables:
   - rustup toolchain install
   - rustc --version
 
+.rustup-windows: &rustup-windows
+  - $ProgressPreference = 'SilentlyContinue'
+  - Invoke-WebRequest https://win.rustup.rs/x86_64 -OutFile rustup-init.exe
+  - .\rustup-init.exe -y --profile minimal --default-toolchain none
+  - $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
+  - rustup toolchain install
+  - rustc --version
+
 .rust-windows:
   tags: [saas-windows-medium-amd64]
-  # before_script and script run in one PowerShell session: the certificate
-  # stays in $pfxBase64 and $pfxPassword, which no child process inherits.
   before_script:
-    - $pfxBase64 = $env:SIGNTOOL_PFX_BASE64; $pfxPassword = $env:SIGNTOOL_PFX_PASSWORD
     - foreach ($v in 'QUICKPLAY_UPDATE_KEY', 'SIGNTOOL_PFX_BASE64', 'SIGNTOOL_PFX_PASSWORD', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'R2_ACCOUNT_ID', 'R2_BUCKET') { Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
-    - $ProgressPreference = 'SilentlyContinue'
-    - Invoke-WebRequest https://win.rustup.rs/x86_64 -OutFile rustup-init.exe
-    - .\rustup-init.exe -y --profile minimal --default-toolchain none
-    - $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
-    - rustup toolchain install
-    - rustc --version
+    - *rustup-windows
 
 .linux-deps: &linux-deps
   - apt-get update
@@ -144,6 +153,18 @@ version:
     - test "v$version" = "$CI_COMMIT_TAG" || { echo "tag $CI_COMMIT_TAG does not match version $version"; exit 1; }
     - test -f "docs/releases/$CI_COMMIT_TAG.md" || { echo "docs/releases/$CI_COMMIT_TAG.md is missing"; exit 1; }
 
+# cargo-packager, built in a job of its own for sign-windows to run.
+tools-windows:
+  extends: [.release-rules, .rust-windows]
+  stage: build
+  needs: [version]
+  timeout: 1h
+  script:
+    - cargo install cargo-packager --version "$env:CARGO_PACKAGER_VERSION" --locked --root "$env:CI_PROJECT_DIR\tools"
+  artifacts:
+    paths: [tools/bin/]
+    expire_in: 1 week
+
 release-windows:
   extends: [.release-rules, .rust-windows]
   stage: build
@@ -151,17 +172,34 @@ release-windows:
   timeout: 2h
   script:
     - cargo test --locked
-    - cargo install cargo-packager --version "$env:CARGO_PACKAGER_VERSION" --locked
-    # Everything is compiled before the certificate enters the runner, so no
-    # build script of any dependency runs while the key is importable.
     - cargo build --release --locked
-    # Authenticode, as release.yml does it: the certificate into the user's
-    # store, cargo-packager signing by its thumbprint. The thumbprint is
-    # written down for after_script, which runs in a shell of its own.
-    - if (-not $pfxBase64 -or -not $pfxPassword) { Write-Error "SIGNTOOL_PFX_BASE64 and SIGNTOOL_PFX_PASSWORD are required to publish a release"; exit 1 }
+  artifacts:
+    paths: [target/release/waveflow-quickplay.exe]
+    expire_in: 1 week
+
+# Authenticode, as release.yml does it: the certificate into the user's
+# store, cargo-packager signing by its thumbprint. Nothing is compiled here:
+# cargo-packager comes from tools-windows, the executable from
+# release-windows, and the toolchain is only there for `cargo metadata`.
+sign-windows:
+  extends: .release-rules
+  stage: sign
+  needs: [release-windows, tools-windows]
+  tags: [saas-windows-medium-amd64]
+  environment:
+    name: release-signing
+  timeout: 1h
+  before_script:
+    - *rustup-windows
+  script:
+    - $env:Path = "$env:CI_PROJECT_DIR\tools\bin;$env:Path"
+    # The thumbprint is written down for after_script, which runs in a shell
+    # of its own.
+    - if (-not $env:SIGNTOOL_PFX_BASE64 -or -not $env:SIGNTOOL_PFX_PASSWORD) { Write-Error "SIGNTOOL_PFX_BASE64 and SIGNTOOL_PFX_PASSWORD are required to publish a release"; exit 1 }
     - $pfx = Join-Path $env:CI_PROJECT_DIR "signing.pfx"
-    - "[IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($pfxBase64))"
-    - $password = ConvertTo-SecureString $pfxPassword -AsPlainText -Force
+    - "[IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:SIGNTOOL_PFX_BASE64))"
+    - $password = ConvertTo-SecureString $env:SIGNTOOL_PFX_PASSWORD -AsPlainText -Force
+    - Remove-Item Env:SIGNTOOL_PFX_BASE64, Env:SIGNTOOL_PFX_PASSWORD
     - $cert = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $password
     - Remove-Item $pfx
     - $thumbprint = $cert.Thumbprint
@@ -277,6 +315,24 @@ release-macos:
     paths: [target/packager/*.dmg, target/packager/SHA256SUMS-macos.txt]
     expire_in: 1 week
 
+# rsign, built in a job of its own for publish to run.
+tools-linux:
+  extends: [.release-rules, .linux-medium]
+  stage: build
+  needs: [version]
+  image: ubuntu:22.04
+  timeout: 1h
+  variables:
+    DEBIAN_FRONTEND: noninteractive
+  script:
+    - *drop-secrets-bash
+    - apt-get update && apt-get install -y --no-install-recommends ca-certificates curl build-essential
+    - *rustup-bash
+    - cargo install rsign2 --version "$RSIGN_VERSION" --locked --root "$CI_PROJECT_DIR/tools"
+  artifacts:
+    paths: [tools/bin/]
+    expire_in: 1 week
+
 # R2 is the only host here, so missing R2 variables fail the release instead
 # of skipping the copy as on GitHub. The GitLab release holds links, not
 # files: a project's storage quota would not take a set of packages per
@@ -287,22 +343,25 @@ publish:
   # One publish at a time: each reads the manifest on R2 before replacing it.
   resource_group: r2-quickplay
   image: ubuntu:24.04
-  needs: [release-windows, release-linux, release-macos]
+  needs: [sign-windows, release-linux, release-macos, tools-linux]
+  environment:
+    name: release-publish
   variables:
     DEBIAN_FRONTEND: noninteractive
   script:
-    # The release key and the R2 token wait in shell variables while the
-    # tools are installed and rsign2 is compiled, then come back.
+    # Nothing is compiled here; rsign comes from tools-linux. The release key
+    # and the R2 token still wait in shell variables, each given back to the
+    # one command that needs it.
     - |
       for v in QUICKPLAY_UPDATE_KEY R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_ACCOUNT_ID R2_BUCKET; do
         eval "saved_$v=\${$v-}"
       done
     - *drop-secrets-bash
-    - apt-get update && apt-get install -y --no-install-recommends ca-certificates curl unzip jq build-essential
+    - apt-get update && apt-get install -y --no-install-recommends ca-certificates curl unzip jq
     - curl -fsSL https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o awscliv2.zip
     - unzip -q awscliv2.zip && ./aws/install && rm -rf aws awscliv2.zip
-    - *rustup-bash
-    - cargo install rsign2 --version "$RSIGN_VERSION" --locked
+    - export PATH="$CI_PROJECT_DIR/tools/bin:$PATH"
+    - rsign --version
     - export TAG_NAME="$CI_COMMIT_TAG" VERSION="${CI_COMMIT_TAG#v}"
     - mkdir dist && cp target/packager/*.exe target/packager/*.deb target/packager/*.rpm target/packager/*.AppImage target/packager/*.dmg target/packager/SHA256SUMS-*.txt dist/
     # The key reaches the signing alone, the R2 token the upload alone.
