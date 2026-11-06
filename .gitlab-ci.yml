@@ -366,22 +366,24 @@ sign-manifest:
 # R2 is the only host here, so missing R2 variables fail the release instead
 # of skipping the copy as on GitHub. The GitLab release holds links, not
 # files: a project's storage quota would not take a set of packages per
-# version. Only the R2 token is here, never the release key.
+# version. Only the R2 token is here, never the release key. The AWS CLI is
+# AWS's own image, pinned by digest, so no installer is downloaded and run
+# next to the token; jq comes from Amazon Linux's signed repository. Move
+# the tag and the digest together.
 publish:
   extends: [.release-rules, .linux-medium]
   stage: publish
   # One publish at a time: each reads the manifest on R2 before replacing it.
   resource_group: r2-quickplay
-  image: ubuntu:24.04
+  image:
+    name: amazon/aws-cli:2.38.1@sha256:733d5be1015825e4038c6016f3fa9954868ddee1f611b73be795a9cc2e706bfd
+    entrypoint: [""]
   needs: [sign-windows, release-linux, release-macos, sign-manifest]
   environment:
     name: release-publish
-  variables:
-    DEBIAN_FRONTEND: noninteractive
   script:
-    - apt-get update && apt-get install -y --no-install-recommends ca-certificates curl unzip jq
-    - curl -fsSL https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o awscliv2.zip
-    - unzip -q awscliv2.zip && ./aws/install && rm -rf aws awscliv2.zip
+    - dnf install -y -q jq
+    - aws --version
     - export TAG_NAME="$CI_COMMIT_TAG"
     - *gather-dist
     - test -f dist/latest.json

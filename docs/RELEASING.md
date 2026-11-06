@@ -134,8 +134,9 @@ environment: `sign-windows` (the certificate), `sign-manifest` (the release
 key) and `publish` (the R2 token), which compile nothing and run tools built
 by jobs of their own (`tools-windows`, `tools-linux`). No build script and
 no test ever runs in a job that has a secret, and no secret shares a job
-with another: the release key never sits in the job that downloads and runs
-the AWS CLI installer. A secret left at the default scope, `*`, undoes that:
+with another: the release key never sits next to the AWS CLI, which
+`publish` takes from AWS's own image, pinned by digest, rather than from an
+installer downloaded at run time. A secret left at the default scope, `*`, undoes that:
 keep the scopes, and keep any job added that compiles out of those three
 environments. They show up under Operate → Environments once a release has
 run.
