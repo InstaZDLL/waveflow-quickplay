@@ -30,6 +30,11 @@ updates:
       # waveflow-core is a git dependency pinned to a WaveFlow commit in
       # Cargo.toml; it is bumped by hand together with the desktop app.
       - dependency-name: "waveflow-core"
+      # `#[implement]` from `windows` expands to `windows_core` paths, so
+      # windows-core must stay on the same version as `windows`. It is
+      # bumped by hand together with it. Patches are fine.
+      - dependency-name: "windows-core"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: "/"
