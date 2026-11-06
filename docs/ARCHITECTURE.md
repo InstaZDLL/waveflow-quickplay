@@ -312,8 +312,18 @@ development build reports the version of the last release cut.
 ## Updates
 
 At launch, unless `check_updates` is off in the settings, `src/update.rs`
-reads `latest.json` from the latest GitHub release on a thread of its own
-(`reqwest` blocking, the client `waveflow-core` already builds). The
+reads `latest.json` on a thread of its own (`reqwest` blocking, the client
+`waveflow-core` already builds) from two hosts, one after the other: the
+latest GitHub release, and its copy on WaveFlow's R2 bucket
+(`https://download.waveflow.app/quickplay/latest.json`), which keeps
+updates working if the GitHub account goes ([RELEASING.md](RELEASING.md)).
+Each manifest gets 30 seconds; a host that fails in any way (an error, a
+page that is not a manifest, a stale version) hides nothing the other one
+offers, and only both failing is an error. The versions newer than this
+copy are tried newest first; for one version GitHub's package comes first,
+R2's if it cannot be downloaded or does not verify. A version whose
+packages all fail is passed over for the next, so a host announcing a
+version that does not exist cannot hold back a real one. The
 manifest gives the version and, per package QuickPlay can install by
 itself, its URL and its minisign signature: `windows-x86_64` (the NSIS
 installer), `darwin-universal` (the disk image) and
@@ -349,7 +359,8 @@ The package is downloaded to `<cache dir>/waveflow-quickplay/updates`,
 verified before it is kept, and verified again when a later launch finds it
 there instead of downloading it again (a restart for the pin closes without
 installing). A debug build looks only when `QUICKPLAY_UPDATE_URL` names a
-manifest to test with. A restart for the pin starts the AppImage again
+manifest to test with. In any build, that variable replaces both hosts:
+only its manifest is read, with no second host to fall back on. A restart for the pin starts the AppImage again
 rather than the executable inside it, whose mount goes away with the
 process that is closing.
 

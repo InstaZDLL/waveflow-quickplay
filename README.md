@@ -144,7 +144,7 @@ They are complementary, not two sizes of the same thing: QuickPlay deliberately 
 
 - Inter and Noto Sans CJK are embedded: Japanese, Korean and Chinese titles, and the interface in those languages, render the same on every machine.
 - Preferences live in their own file, `<config dir>/waveflow-quickplay/settings.json`, never read by the desktop app.
-- `RUST_LOG=debug` turns the log up; `QUICKPLAY_CAPTURE_DIR=<dir>` writes a PNG of the player window after start, for displays that cannot be grabbed from outside such as GNOME on Wayland. `QUICKPLAY_WAVEFLOW=<path>` points the WaveFlow button at another executable, such as a development build, without the version check. `QUICKPLAY_UPDATE_URL=<url>` reads the update manifest from elsewhere, and is the only way a debug build looks for updates; the packages it lists must still be signed with the release key.
+- `RUST_LOG=debug` turns the log up; `QUICKPLAY_CAPTURE_DIR=<dir>` writes a PNG of the player window after start, for displays that cannot be grabbed from outside such as GNOME on Wayland. `QUICKPLAY_WAVEFLOW=<path>` points the WaveFlow button at another executable, such as a development build, without the version check. `QUICKPLAY_UPDATE_URL=<url>` reads the update manifest from there instead of GitHub and R2, in any build, and is the only way a debug build looks for updates; the packages it lists must still be signed with the release key.
 
 ## Screenshots
 

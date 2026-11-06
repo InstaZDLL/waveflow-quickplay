@@ -1,9 +1,18 @@
 //! Updates. At each launch, unless it is switched off in the settings,
-//! QuickPlay reads the manifest of the latest release (`latest.json`, next
-//! to the packages on GitHub). A newer version is downloaded in the
-//! background and checked against the release key (minisign), then
-//! installed when QuickPlay closes: the next launch is the new version, and
-//! nothing that plays is cut.
+//! QuickPlay reads the manifest of the latest release (`latest.json`) from
+//! two hosts: GitHub, next to the packages, and its copy on WaveFlow's R2
+//! bucket, which keeps working if the GitHub account does not. The newest
+//! version either offers is downloaded in the background and checked
+//! against the release key (minisign), then installed when QuickPlay
+//! closes: the next launch is the new version, and nothing that plays is
+//! cut.
+//!
+//! The manifest is not trusted for the version: each package's signature
+//! names the version and the file it was signed for, so neither host, nor
+//! anyone answering in its place, can pass an older package off as a newer
+//! version. A version no package backs is passed over for the next newest,
+//! so a host cannot hold updates back by announcing one that does not
+//! exist.
 //!
 //! Only the copies QuickPlay can replace by itself update this way: the
 //! Windows installer's (per user), an app bundle in a folder this user can
@@ -19,8 +28,17 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
-const MANIFEST_URL: &str =
-    "https://github.com/InstaZDLL/waveflow-quickplay/releases/latest/download/latest.json";
+/// Where the manifest is published, asked in this order: the GitHub
+/// release, then its copy on R2 (`scripts/release/publish-r2.sh`), whose
+/// packages sit under `quickplay/releases/<tag>/` with the same names and
+/// signatures. A host added here reaches only the versions built after it.
+const MANIFEST_URLS: [&str; 2] = [
+    "https://github.com/InstaZDLL/waveflow-quickplay/releases/latest/download/latest.json",
+    "https://download.waveflow.app/quickplay/latest.json",
+];
+/// A host that accepts the connection and never answers must not keep the
+/// next one from being asked.
+const MANIFEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// The release key: its secret half signs the packages in the release
 /// workflow (`.github/workflows/release.yml`).
 const PUBLIC_KEY: &str = "RWTCT9DA0wrP3Arx6fuGQUSRLNuMIetYOx4pCu9F+/S9PHb0fzeMHF/4";
@@ -63,6 +81,7 @@ pub enum Install {
 }
 
 impl Install {
+    /// How this copy was installed, read from where its executable is.
     pub fn detect() -> Self {
         let Ok(exe) = std::env::current_exe() else {
             return Install::Elsewhere;
@@ -126,6 +145,7 @@ fn appimage_of(
     exe.starts_with(appdir?).then(|| image.map(PathBuf::from))?
 }
 
+/// Whether this user may write `path`, by the kernel's own check.
 #[cfg(unix)]
 fn writable(path: &Path) -> bool {
     use std::os::unix::ffi::OsStrExt;
@@ -137,6 +157,7 @@ fn writable(path: &Path) -> bool {
     unsafe { libc::access(c.as_ptr(), libc::W_OK) == 0 }
 }
 
+/// Taken as writable elsewhere: a write that fails says so when it happens.
 #[cfg(not(unix))]
 fn writable(_: &Path) -> bool {
     true
@@ -181,58 +202,175 @@ pub fn spawn_check(notify: impl Fn() + Send + 'static) -> mpsc::Receiver<Found> 
     rx
 }
 
+/// Looks for a newer version on the update hosts and, when this copy can
+/// install it, downloads and verifies it.
 fn check(install: &Install) -> io::Result<Option<Found>> {
-    let url = std::env::var("QUICKPLAY_UPDATE_URL").unwrap_or_else(|_| MANIFEST_URL.into());
+    // A test manifest replaces both hosts, in any build.
+    let urls = match std::env::var("QUICKPLAY_UPDATE_URL") {
+        Ok(url) => vec![url],
+        Err(_) => MANIFEST_URLS.iter().map(|u| u.to_string()).collect(),
+    };
+    let current = semver::Version::parse(env!("CARGO_PKG_VERSION")).map_err(invalid)?;
+    check_at(&urls, PUBLIC_KEY, &current, install, cache_dir())
+}
+
+/// [`check`] against `urls`, for packages signed with `key`, from a copy at
+/// version `current` that caches in `dir`.
+fn check_at(
+    urls: &[String],
+    key: &str,
+    current: &semver::Version,
+    install: &Install,
+    dir: Option<PathBuf>,
+) -> io::Result<Option<Found>> {
     let client = reqwest::blocking::Client::builder()
         .user_agent(concat!("waveflow-quickplay/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(600))
         .build()
         .map_err(io::Error::other)?;
-    let manifest: Manifest =
-        serde_json::from_slice(&download(&client, &url, MAX_MANIFEST)?).map_err(invalid)?;
-    let latest = semver::Version::parse(&manifest.version).map_err(invalid)?;
-    let current = semver::Version::parse(env!("CARGO_PKG_VERSION")).map_err(invalid)?;
-    if latest <= current {
+    // One host at a time, each on its own: a host that fails, whatever the
+    // way (an error page, a suspended account's page, a stale manifest),
+    // hides nothing the other one offers. Only all of them failing is an
+    // error.
+    let mut manifests = Vec::new();
+    let mut last_error = None;
+    for url in urls {
+        match read_manifest(&client, url) {
+            Ok(manifest) => manifests.push(manifest),
+            Err(e) => {
+                tracing::warn!(%url, error = %e, "could not read the update manifest");
+                last_error = Some(e);
+            }
+        }
+    }
+    if manifests.is_empty() {
+        return Err(last_error.unwrap_or_else(|| io::Error::other("no update host")));
+    }
+    let offers = newer(manifests, current);
+    let Some((newest, _)) = offers.first() else {
         // The installer of the update now running, which Windows could not
         // delete while it ran, goes.
-        if let Some(dir) = cache_dir() {
-            clear_cache(&dir, None);
+        if let Some(dir) = &dir {
+            clear_cache(dir, &[]);
         }
         return Ok(None);
-    }
-    let version = manifest.version;
-    // A release without this copy's package (or a copy that takes none)
-    // only says that it is out.
-    let Some(package) = install.platform().and_then(|p| manifest.platforms.get(p)) else {
-        tracing::info!(%version, ?install, "a new version is available");
-        return Ok(Some(Found::Available(version)));
     };
+    // The packages of this copy's platform: newest version first, and for
+    // one version in the order of the hosts. A release without one (or a
+    // copy that takes none) only says that it is out.
+    let candidates: Vec<(&str, &Package)> = match install.platform() {
+        Some(p) => offers
+            .iter()
+            .flat_map(|(v, sources)| {
+                sources
+                    .iter()
+                    .filter_map(move |m| Some((v.as_str(), m.platforms.get(p)?)))
+            })
+            .collect(),
+        None => Vec::new(),
+    };
+    if candidates.is_empty() {
+        tracing::info!(version = %newest, ?install, "a new version is available");
+        return Ok(Some(Found::Available(newest.clone())));
+    }
+    let dir = dir.ok_or_else(|| io::Error::other("no cache directory"))?;
+    std::fs::create_dir_all(&dir)?;
+    let files: Vec<PathBuf> = candidates
+        .iter()
+        .filter_map(|(_, p)| file_name(&p.url))
+        .map(|name| dir.join(name))
+        .collect();
+    clear_cache(&dir, &files);
+    // The first package that downloads and verifies wins. A host that
+    // answers the small manifest but not the package leaves it to the other
+    // host. The version a manifest claims is not signed, only each package
+    // is: a version that no package backs is passed over for the next one,
+    // so a host announcing a version that does not exist cannot hold back
+    // a real one. Nothing older than this copy is ever offered.
+    let mut last_error = None;
+    for (version, package) in candidates {
+        match fetch_package(&client, key, &dir, package, version) {
+            Ok(file) => {
+                tracing::info!(%version, file = %file.display(), "update ready, installed on close");
+                return Ok(Some(Found::Ready(Update {
+                    version: version.to_string(),
+                    file,
+                    install: install.clone(),
+                })));
+            }
+            Err(e) => {
+                tracing::warn!(%version, url = %package.url, error = %e, "could not fetch the update");
+                last_error = Some(e);
+            }
+        }
+    }
+    Err(last_error.unwrap_or_else(|| io::Error::other("no package")))
+}
+
+/// The manifest at `url`, if it reads as one, with a version that parses.
+fn read_manifest(client: &reqwest::blocking::Client, url: &str) -> io::Result<Manifest> {
+    let response = client
+        .get(url)
+        .timeout(MANIFEST_TIMEOUT)
+        .send()
+        .and_then(|r| r.error_for_status())
+        .map_err(io::Error::other)?;
+    let manifest: Manifest =
+        serde_json::from_slice(&read_at_most(response, MAX_MANIFEST, url)?).map_err(invalid)?;
+    semver::Version::parse(&manifest.version).map_err(invalid)?;
+    Ok(manifest)
+}
+
+/// The versions the manifests offer that are newer than `current`, newest
+/// first, each with every manifest that offers it, in the order they came.
+fn newer(manifests: Vec<Manifest>, current: &semver::Version) -> Vec<(String, Vec<Manifest>)> {
+    let mut offers: Vec<(semver::Version, Vec<Manifest>)> = Vec::new();
+    for manifest in manifests {
+        let Ok(version) = semver::Version::parse(&manifest.version) else {
+            continue;
+        };
+        if version <= *current {
+            continue;
+        }
+        match offers.iter_mut().find(|(v, _)| *v == version) {
+            Some((_, sources)) => sources.push(manifest),
+            None => offers.push((version, vec![manifest])),
+        }
+    }
+    // Stable: the hosts keep their order within a version.
+    offers.sort_by(|(a, _), (b, _)| b.cmp(a));
+    offers
+        .into_iter()
+        .map(|(v, sources)| (v.to_string(), sources))
+        .collect()
+}
+
+/// The package in the cache, verified: already there from an earlier
+/// launch that closed before installing it, or downloaded now.
+fn fetch_package(
+    client: &reqwest::blocking::Client,
+    key: &str,
+    dir: &Path,
+    package: &Package,
+    version: &str,
+) -> io::Result<PathBuf> {
     let name = file_name(&package.url)
         .ok_or_else(|| invalid(format!("no file name in {}", package.url)))?;
-    let dir = cache_dir().ok_or_else(|| io::Error::other("no cache directory"))?;
-    std::fs::create_dir_all(&dir)?;
     let file = dir.join(name);
-    clear_cache(&dir, Some(&file));
-    // Already fetched by an earlier launch that closed before installing it.
     let cached = std::fs::File::open(&file)
         .and_then(|f| read_at_most(f, MAX_PACKAGE, "the cached package"))
         .ok()
-        .filter(|bytes| verify(PUBLIC_KEY, bytes, &package.signature, &version, name).is_ok());
+        .filter(|bytes| verify(key, bytes, &package.signature, version, name).is_ok());
     if cached.is_none() {
         tracing::info!(%version, url = %package.url, "downloading the update");
-        let bytes = download(&client, &package.url, MAX_PACKAGE)?;
-        verify(PUBLIC_KEY, &bytes, &package.signature, &version, name)?;
+        let bytes = download(client, &package.url, MAX_PACKAGE)?;
+        verify(key, &bytes, &package.signature, version, name)?;
         let partial = file.with_extension("part");
         std::fs::write(&partial, &bytes)?;
         std::fs::rename(&partial, &file)?;
     }
-    tracing::info!(%version, file = %file.display(), "update ready, installed on close");
-    Ok(Some(Found::Ready(Update {
-        version,
-        file,
-        install: install.clone(),
-    })))
+    Ok(file)
 }
 
 /// The body at `url`, refused past `max` bytes.
@@ -282,24 +420,26 @@ fn file_name(url: &str) -> Option<&str> {
     plain.then_some(name)
 }
 
+/// Where updates are downloaded to: `<cache dir>/waveflow-quickplay/updates`.
 fn cache_dir() -> Option<PathBuf> {
     dirs::cache_dir().map(|d| d.join("waveflow-quickplay").join("updates"))
 }
 
 /// Packages of versions passed over or installed, and partial downloads,
 /// go; `keep` stays.
-fn clear_cache(dir: &Path, keep: Option<&Path>) {
+fn clear_cache(dir: &Path, keep: &[PathBuf]) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if Some(path.as_path()) != keep && path.is_file() {
+        if !keep.contains(&path) && path.is_file() {
             let _ = std::fs::remove_file(&path);
         }
     }
 }
 
+/// An `InvalidData` error saying `e`.
 fn invalid(e: impl ToString) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, e.to_string())
 }
@@ -399,12 +539,14 @@ fn replace_appimage(new: &Path, image: &Path) -> io::Result<()> {
     result
 }
 
+/// Marks a new AppImage executable (`rwxr-xr-x`).
 #[cfg(unix)]
 fn set_executable(file: &std::fs::File) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     file.set_permissions(std::fs::Permissions::from_mode(0o755))
 }
 
+/// Nothing to mark outside Unix.
 #[cfg(not(unix))]
 fn set_executable(_: &std::fs::File) -> io::Result<()> {
     Ok(())
@@ -423,11 +565,13 @@ trusted comment: waveflow-quickplay 1.2.3 test.bin
 2uxf9Jw1xvGmti8wC/Qq7BSjyyJO6Dc/8aPrzDjEz7Nd4wvstABBs3ef6IDagkp59iJoM35EXg8/8UmUeCN7BA==
 ";
 
+    /// A package and the signature the test key made for it agree.
     #[test]
     fn a_signed_package_passes() {
         verify(TEST_KEY, TEST_PACKAGE, TEST_SIGNATURE, "1.2.3", "test.bin").unwrap();
     }
 
+    /// One flipped bit fails the signature.
     #[test]
     fn a_changed_package_fails() {
         let mut changed = TEST_PACKAGE.to_vec();
@@ -435,6 +579,7 @@ trusted comment: waveflow-quickplay 1.2.3 test.bin
         assert!(verify(TEST_KEY, &changed, TEST_SIGNATURE, "1.2.3", "test.bin").is_err());
     }
 
+    /// The release key does not accept what the test key signed.
     #[test]
     fn another_key_fails() {
         assert!(verify(
@@ -455,6 +600,7 @@ trusted comment: waveflow-quickplay 1.2.3 test.bin
         assert!(verify(TEST_KEY, TEST_PACKAGE, TEST_SIGNATURE, "1.2.3", "other.bin").is_err());
     }
 
+    /// `APPIMAGE` counts only when this executable runs from that image's mount.
     #[test]
     fn an_appimage_is_the_one_whose_mount_runs_this() {
         let image = || Some("/home/u/Apps/waveflow-quickplay.AppImage".into());
@@ -490,17 +636,20 @@ trusted comment: waveflow-quickplay 1.2.3 test.bin
         );
     }
 
+    /// A read past its limit is refused, one at the limit is not.
     #[test]
     fn reads_stop_at_the_limit() {
         assert_eq!(read_at_most(&b"1234"[..], 4, "t").unwrap(), b"1234");
         assert!(read_at_most(&b"12345"[..], 4, "t").is_err());
     }
 
+    /// The public key compiled in is a valid minisign key.
     #[test]
     fn the_release_key_reads() {
         minisign_verify::PublicKey::from_base64(PUBLIC_KEY).unwrap();
     }
 
+    /// Only a plain last segment of a URL becomes a file in the cache.
     #[test]
     fn file_names_are_plain() {
         let base = "https://github.com/InstaZDLL/waveflow-quickplay/releases/download/v1.2.0/";
@@ -513,6 +662,266 @@ trusted comment: waveflow-quickplay 1.2.3 test.bin
         assert_eq!(file_name("https://example.org/a%2F..%2Fb"), None);
     }
 
+    /// A manifest offering `version` for Windows at `url`.
+    fn manifest(version: &str, url: &str) -> Manifest {
+        Manifest {
+            version: version.into(),
+            platforms: HashMap::from([(
+                "windows-x86_64".into(),
+                Package {
+                    url: url.into(),
+                    signature: "s".into(),
+                },
+            )]),
+        }
+    }
+
+    /// `newer` as (version, package URLs) pairs, against `current`.
+    fn offers(manifests: Vec<Manifest>, current: (u64, u64, u64)) -> Vec<(String, Vec<String>)> {
+        let current = semver::Version::new(current.0, current.1, current.2);
+        newer(manifests, &current)
+            .into_iter()
+            .map(|(v, sources)| {
+                let urls = sources
+                    .iter()
+                    .map(|m| m.platforms["windows-x86_64"].url.clone())
+                    .collect();
+                (v, urls)
+            })
+            .collect()
+    }
+
+    /// One `offers` entry: a version and its package URLs.
+    fn offer(version: &str, urls: &[&str]) -> (String, Vec<String>) {
+        (version.into(), urls.iter().map(|u| u.to_string()).collect())
+    }
+
+    /// A stale host does not hide a newer version the other one offers, and
+    /// the older one stays behind it in case no package backs the newer.
+    #[test]
+    fn the_newest_version_comes_first() {
+        assert_eq!(
+            offers(
+                vec![manifest("1.5.0", "github"), manifest("1.6.0", "r2")],
+                (1, 4, 0)
+            ),
+            [offer("1.6.0", &["r2"]), offer("1.5.0", &["github"])]
+        );
+    }
+
+    /// Both hosts offering the version are kept, in the order they were
+    /// asked, so the second one's package is there if the first one's fails.
+    #[test]
+    fn hosts_that_agree_are_all_kept() {
+        assert_eq!(
+            offers(
+                vec![manifest("1.5.0", "github"), manifest("1.5.0", "r2")],
+                (1, 4, 0)
+            ),
+            [offer("1.5.0", &["github", "r2"])]
+        );
+    }
+
+    /// Nothing newer than this copy, or no manifest, is no update.
+    #[test]
+    fn nothing_newer_is_no_update() {
+        assert!(offers(
+            vec![manifest("1.5.0", "github"), manifest("1.4.0", "r2")],
+            (1, 5, 0)
+        )
+        .is_empty());
+        assert!(offers(Vec::new(), (1, 5, 0)).is_empty());
+    }
+
+    /// Only versions newer than this copy are offered, whatever a host
+    /// claims besides.
+    #[test]
+    fn older_versions_are_never_offered() {
+        assert_eq!(
+            offers(
+                vec![manifest("99.0.0", "github"), manifest("1.3.0", "r2")],
+                (1, 4, 0)
+            ),
+            [offer("99.0.0", &["github"])]
+        );
+    }
+
+    /// A manifest whose version does not parse is left out, not an error.
+    #[test]
+    fn a_manifest_without_a_version_is_left_out() {
+        assert_eq!(
+            offers(
+                vec![manifest("latest", "github"), manifest("1.5.0", "r2")],
+                (1, 4, 0)
+            ),
+            [offer("1.5.0", &["r2"])]
+        );
+    }
+
+    /// A local HTTP server on `listener` answering `routes` (path, status,
+    /// body), 404 elsewhere, until the test process ends.
+    fn serve(listener: std::net::TcpListener, routes: Vec<(String, u16, Vec<u8>)>) {
+        use std::io::{BufRead, Write};
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let mut reader = io::BufReader::new(stream.try_clone().unwrap());
+                let mut request = String::new();
+                if reader.read_line(&mut request).is_err() {
+                    continue;
+                }
+                // The headers, up to the blank line.
+                let mut header = String::new();
+                while reader.read_line(&mut header).is_ok_and(|n| n > 2) {
+                    header.clear();
+                }
+                let path = request.split_whitespace().nth(1).unwrap_or_default();
+                let (status, body) = routes
+                    .iter()
+                    .find(|(p, ..)| p == path)
+                    .map(|(_, s, b)| (*s, b.as_slice()))
+                    .unwrap_or((404, b""));
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 {status} X\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(body);
+            }
+        });
+    }
+
+    /// A manifest offering `version` for Windows at `url`, signed by the
+    /// test key for 1.2.3 under the name test.bin.
+    fn manifest_json(version: &str, url: &str) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "version": version,
+            "platforms": { "windows-x86_64": { "url": url, "signature": TEST_SIGNATURE } }
+        }))
+        .unwrap()
+    }
+
+    /// One route of the test server.
+    fn route(path: &str, status: u16, body: &[u8]) -> (String, u16, Vec<u8>) {
+        (path.into(), status, body.to_vec())
+    }
+
+    /// What `check_at` finds from a 1.0.0 Windows copy, against the two
+    /// manifests the server has at /a and /b, with a cache of its own: the
+    /// version and the bytes of the package it made ready.
+    fn check_two_hosts(
+        test: &str,
+        routes: impl Fn(&str) -> Vec<(String, u16, Vec<u8>)>,
+    ) -> io::Result<(String, Vec<u8>)> {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        serve(listener, routes(&base));
+        let dir =
+            std::env::temp_dir().join(format!("quickplay-update-{test}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let found = check_at(
+            &[
+                format!("{base}/a/latest.json"),
+                format!("{base}/b/latest.json"),
+            ],
+            TEST_KEY,
+            &semver::Version::new(1, 0, 0),
+            &Install::Windows,
+            Some(dir.clone()),
+        )
+        .map(|found| match found {
+            Some(Found::Ready(update)) => {
+                let bytes = std::fs::read(&update.file).unwrap();
+                (update.version, bytes)
+            }
+            _ => panic!("no update ready"),
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+        found
+    }
+
+    /// A host answering with a page that is not a manifest leaves the update to
+    /// the other one.
+    #[test]
+    fn a_host_that_fails_leaves_it_to_the_other() {
+        let found = check_two_hosts("manifest", |base| {
+            vec![
+                route("/a/latest.json", 200, b"<html>account suspended</html>"),
+                route(
+                    "/b/latest.json",
+                    200,
+                    &manifest_json("1.2.3", &format!("{base}/b/test.bin")),
+                ),
+                route("/b/test.bin", 200, TEST_PACKAGE),
+            ]
+        });
+        assert_eq!(found.unwrap(), ("1.2.3".into(), TEST_PACKAGE.to_vec()));
+    }
+
+    /// A package that cannot be downloaded is fetched from the other host.
+    #[test]
+    fn a_package_that_fails_leaves_it_to_the_other_host() {
+        let found = check_two_hosts("package", |base| {
+            vec![
+                route(
+                    "/a/latest.json",
+                    200,
+                    &manifest_json("1.2.3", &format!("{base}/a/test.bin")),
+                ),
+                route("/a/test.bin", 500, b""),
+                route(
+                    "/b/latest.json",
+                    200,
+                    &manifest_json("1.2.3", &format!("{base}/b/test.bin")),
+                ),
+                route("/b/test.bin", 200, TEST_PACKAGE),
+            ]
+        });
+        assert_eq!(found.unwrap(), ("1.2.3".into(), TEST_PACKAGE.to_vec()));
+    }
+
+    /// A host announcing 9.9.9 over a package signed for 1.2.3 does not keep
+    /// the real 1.2.3 from being installed.
+    #[test]
+    fn a_version_no_package_backs_is_passed_over() {
+        let found = check_two_hosts("fake", |base| {
+            vec![
+                route(
+                    "/a/latest.json",
+                    200,
+                    &manifest_json("9.9.9", &format!("{base}/a/test.bin")),
+                ),
+                route("/a/test.bin", 200, TEST_PACKAGE),
+                route(
+                    "/b/latest.json",
+                    200,
+                    &manifest_json("1.2.3", &format!("{base}/b/test.bin")),
+                ),
+                route("/b/test.bin", 200, TEST_PACKAGE),
+            ]
+        });
+        assert_eq!(found.unwrap(), ("1.2.3".into(), TEST_PACKAGE.to_vec()));
+    }
+
+    /// No manifest at all is an error, not "up to date".
+    #[test]
+    fn every_host_failing_is_an_error() {
+        let found = check_two_hosts("down", |_| vec![route("/a/latest.json", 503, b"")]);
+        assert!(found.is_err());
+    }
+
+    /// The R2 copy is the one that outlives the GitHub account; the release
+    /// workflows publish it at this address (scripts/release/publish-r2.sh).
+    #[test]
+    fn the_second_host_is_the_r2_copy() {
+        assert!(MANIFEST_URLS[0].starts_with("https://github.com/InstaZDLL/waveflow-quickplay/"));
+        assert_eq!(
+            MANIFEST_URLS[1],
+            "https://download.waveflow.app/quickplay/latest.json"
+        );
+    }
+
+    /// The manifest format the release workflows write reads.
     #[test]
     fn the_manifest_reads() {
         let json = r#"{
