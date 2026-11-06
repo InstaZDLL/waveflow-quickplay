@@ -92,9 +92,8 @@ than the files.
   ```
 
 - The R2 copy of every release, which the 1.5.0+ builds already read.
-- WaveFlow's own copy, the project named "WaveFlow" at
-  [`waveflow-groupe/WaveFlow-projet`](https://gitlab.com/waveflow-groupe/WaveFlow-projet)
-  (its path kept the old name; the path is what a URL uses).
+- WaveFlow's own copy,
+  [`waveflow-groupe/WaveFlow`](https://gitlab.com/waveflow-groupe/WaveFlow).
   `waveflow-core` is a git dependency pinned to a WaveFlow commit
   (`Cargo.toml`): without GitHub, cargo finds that commit only there, so
   the `rev` a QuickPlay release pins must have been pushed to it.
@@ -142,7 +141,7 @@ in any job added.
 
 | On GitHub                          | On GitLab                                                                                                                                                                      |
 | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `waveflow-core` from GitHub        | Point `git =` in `Cargo.toml` at `https://gitlab.com/waveflow-groupe/WaveFlow-projet` and run `cargo update -p waveflow-core` (the `rev` stays). A private project also needs this project in its CI/CD job token allowlist, and `CARGO_NET_GIT_FETCH_WITH_CLI=true` with a `url.<…>.insteadOf` that puts `CI_JOB_TOKEN` in the URL; a public one needs neither. |
+| `waveflow-core` from GitHub        | Point `git =` in `Cargo.toml` at `https://gitlab.com/waveflow-groupe/WaveFlow` and run `cargo update -p waveflow-core` (the `rev` stays). A private project also needs this project in its CI/CD job token allowlist, and `CARGO_NET_GIT_FETCH_WITH_CLI=true` with a `url.<…>.insteadOf` that puts `CI_JOB_TOKEN` in the URL; a public one needs neither. |
 | Dependabot, CodeRabbit, PR labels  | Not ported. Renovate is the nearest replacement for updates.                                                                                                                   |
 | Release notes and update link      | The settings' "what's new" link (`RELEASE_PAGE` in `src/update.rs`) and the repository link (`REPOSITORY` in `src/ui/settings.rs`) name GitHub: change them in the next release. |
 | Install links                      | The README and waveflow.app link to GitHub releases: point them at `https://download.waveflow.app/quickplay/releases/<tag>/`.                                                  |
