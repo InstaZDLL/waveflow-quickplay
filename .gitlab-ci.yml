@@ -293,7 +293,7 @@ release-linux:
     # The AppImage carries the job's architecture in its name, which
     # scripts/release/sign-manifest.sh goes by.
     - cd target/packager && ls ./*_"$ARCH".AppImage
-    - sha256sum *.deb *.rpm *.AppImage > "$SUMS" && cat "$SUMS"
+    - sha256sum -- *.deb *.rpm *.AppImage > "$SUMS" && cat "$SUMS"
   artifacts:
     paths:
       - target/packager/*.deb
