@@ -661,6 +661,53 @@ mod tests {
         assert!(registered_path("/usr/bin/waveflow-quickplay".into(), Some(image)).is_err());
     }
 
+    /// `exe_path` itself takes the AppImage when the runtime's variables
+    /// say this executable runs from its mount, and not otherwise (a
+    /// development build started by an AppImage). The variables are read
+    /// from the environment, which the tests share: each case runs this
+    /// test again in a child process that alone has them.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn exe_path_takes_the_appimage_this_runs_from() {
+        const NAME: &str = "integration::tests::exe_path_takes_the_appimage_this_runs_from";
+        const EXPECTED: &str = "QUICKPLAY_TEST_EXPECTED_EXE";
+        if let Some(expected) = std::env::var_os(EXPECTED) {
+            assert_eq!(super::exe_path().unwrap(), PathBuf::from(expected));
+            return;
+        }
+        let exe = std::env::current_exe().unwrap().canonicalize().unwrap();
+        // `appimage()` only accepts an image that is a file.
+        let image =
+            std::env::temp_dir().join(format!("quickplay-test-{}.AppImage", std::process::id()));
+        std::fs::write(&image, b"").unwrap();
+        let image = image.canonicalize().unwrap();
+        let mount = exe.parent().unwrap();
+        let elsewhere = std::env::temp_dir().canonicalize().unwrap();
+        let outputs: Vec<_> = [(mount, &image), (elsewhere.as_path(), &exe)]
+            .into_iter()
+            .map(|(appdir, expected)| {
+                std::process::Command::new(&exe)
+                    .args(["--exact", NAME, "--test-threads=1"])
+                    .env("APPDIR", appdir)
+                    .env("APPIMAGE", &image)
+                    .env(EXPECTED, expected)
+                    .output()
+            })
+            .collect();
+        // Removed before anything is asserted, so a failure leaves nothing.
+        let _ = std::fs::remove_file(&image);
+        for out in outputs {
+            let out = out.unwrap();
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            // "1 passed": the child found this test, rather than none.
+            assert!(
+                out.status.success() && stdout.contains("1 passed"),
+                "{stdout}{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+    }
+
     #[test]
     fn verbatim_prefixes_come_off_shares_included() {
         assert_eq!(strip_verbatim(r"\\?\C:\QP\qp.exe"), r"C:\QP\qp.exe");
