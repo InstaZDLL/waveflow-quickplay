@@ -96,15 +96,23 @@ than the files.
 
   GitLab reads `.gitlab-ci.yml` from the commit it builds, so the gate
   holds for every commit that carries it: with `QUICKPLAY_GITLAB_CI`
-  unset, nothing runs on those pushes. To try the pipeline before a
-  switch, set it to `on`, open a merge request from a throwaway branch,
-  and delete the variable afterwards.
+  unset, nothing runs on those pushes, which this checks without running
+  anything (it should answer "The pipeline did not run"):
+
+  ```bash
+  glab ci lint .gitlab-ci.yml --dry-run --ref main -R waveflow-groupe/waveflow-quickplay
+  ```
+
+  To try the pipeline before a switch, set the variable to `on`, open a
+  merge request from a throwaway branch cut from `main` (which carries the
+  gate), and delete the variable afterwards. Push no tag and no `main` to
+  GitLab while it is on: a tag would start a real release.
 
   `v1.5.0` predates the gate: its `.gitlab-ci.yml` starts a release
   whatever the variable says. It is already on GitLab; never run or retry
   a pipeline for it, and if the project is ever rebuilt, push it with
-  `git push -o ci.skip`. Tags up to `v1.4.0` have no `.gitlab-ci.yml` and
-  start nothing.
+  `git push -o ci.skip gitlab v1.5.0` before the other tags. Tags up to
+  `v1.4.0` have no `.gitlab-ci.yml` and start nothing.
 
 - The R2 copy of every release, which the 1.5.0+ builds already read.
 - WaveFlow's own copy,
