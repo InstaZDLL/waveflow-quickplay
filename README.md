@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.4.0-10b981?style=flat-square" alt="Version 1.4.0" />
+  <img src="https://img.shields.io/badge/version-1.5.0-10b981?style=flat-square" alt="Version 1.5.0" />
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey?style=flat-square" alt="Windows, Linux and macOS" />
   <img src="https://img.shields.io/badge/opens%20in-%3C%20300%20ms-10b981?style=flat-square" alt="Opens in under 300 ms" />
   <img src="https://img.shields.io/badge/license-GPL--3.0--only-green?style=flat-square" alt="GPL-3.0-only" />
@@ -312,10 +312,11 @@ The working set is dominated by the OpenGL driver and the decoded cover
   can look softer at fractional scaling unless the compositor scales X11
   windows natively. A session without XWayland cannot pin.
 - **Updates** start with 1.2.0: 1.0.0 and 1.1.0 do not look for them, so
-  moving on from those takes one install by hand. The check is one request
-  to GitHub at each launch (the release's `latest.json`, then the package
-  when there is a newer one). A `.deb` or an `.rpm` is never replaced by
-  QuickPlay, nor is a copy run from a read-only place (the disk image
+  moving on from those takes one install by hand. At each launch the check
+  reads the release's `latest.json` on GitHub, then its copy on
+  download.waveflow.app, and downloads the package only when there is a
+  newer one; up to 1.4.0 it reads GitHub alone. A `.deb` or an `.rpm` is
+  never replaced by QuickPlay, nor is a copy run from a read-only place (the disk image
   itself, or an app macOS runs from a translocated copy because it was not
   moved to Applications): those only say that a new version is out.
 - **Output device**: the OS default, opened at its default configuration
