@@ -104,8 +104,11 @@ variables:
 
 .rust-windows:
   tags: [saas-windows-medium-amd64]
+  # GitLab stops a PowerShell job at the first command that leaves $? false,
+  # which Remove-Item on a missing item does even with SilentlyContinue: each
+  # removal checks first.
   before_script:
-    - foreach ($v in 'QUICKPLAY_UPDATE_KEY', 'SIGNTOOL_PFX_BASE64', 'SIGNTOOL_PFX_PASSWORD', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'R2_ACCOUNT_ID', 'R2_BUCKET') { Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
+    - foreach ($v in 'QUICKPLAY_UPDATE_KEY', 'SIGNTOOL_PFX_BASE64', 'SIGNTOOL_PFX_PASSWORD', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'R2_ACCOUNT_ID', 'R2_BUCKET') { if (Test-Path "Env:$v") { Remove-Item "Env:$v" } }
     - *rustup-windows
 
 .linux-deps: &linux-deps
@@ -133,11 +136,13 @@ rust-linux:
     - cargo clippy --all-targets --locked -- -D warnings
     - cargo test --locked
 
+# The hosted Windows runner has 2 vCPU: clippy alone takes about 25 minutes
+# from a cold start, the test build as long again.
 rust-windows:
   extends: [.ci-rules, .rust-windows]
   stage: check
   interruptible: true
-  timeout: 1h
+  timeout: 2h
   script:
     - cargo clippy --all-targets --locked -- -D warnings
     - cargo test --locked
@@ -159,18 +164,19 @@ tools-windows:
   extends: [.release-rules, .rust-windows]
   stage: build
   needs: [version]
-  timeout: 1h
+  timeout: 2h
   script:
     - cargo install cargo-packager --version "$env:CARGO_PACKAGER_VERSION" --locked --root "$env:CI_PROJECT_DIR\tools"
   artifacts:
     paths: [tools/bin/]
     expire_in: 1 week
 
+# Two full builds (tests, then release) on the 2-vCPU runner.
 release-windows:
   extends: [.release-rules, .rust-windows]
   stage: build
   needs: [version]
-  timeout: 2h
+  timeout: 3h
   script:
     - cargo test --locked
     - cargo build --release --locked
@@ -225,7 +231,7 @@ sign-windows:
   after_script:
     - $file = Join-Path $env:CI_PROJECT_DIR "signing.thumbprint"
     - if (Test-Path $file) { $t = (Get-Content $file).Trim(); Get-ChildItem Cert:\CurrentUser\My | Where-Object { $_.Thumbprint -eq $t } | Remove-Item; Remove-Item $file }
-    - Remove-Item (Join-Path $env:CI_PROJECT_DIR "signing.pfx") -ErrorAction SilentlyContinue
+    - $pfx = Join-Path $env:CI_PROJECT_DIR "signing.pfx"; if (Test-Path $pfx) { Remove-Item $pfx }
   artifacts:
     paths: [target/packager/*.exe, target/packager/SHA256SUMS-windows.txt]
     expire_in: 1 week
