@@ -116,9 +116,40 @@ impl Install {
         match self {
             Install::Windows => Some("windows-x86_64"),
             Install::MacApp(_) => Some("darwin-universal"),
-            Install::AppImage(_) => Some("linux-x86_64-appimage"),
+            Install::AppImage(_) => appimage_platform(std::env::consts::ARCH),
             Install::Elsewhere => None,
         }
+    }
+
+    /// Whether this copy can take the package at `url`. The manifest is not
+    /// signed, so a host could list the x86_64 AppImage, genuinely signed,
+    /// under the aarch64 key; the file name is signed, and cargo-packager
+    /// ends it with the architecture, so an AppImage must name this one.
+    fn takes(&self, url: &str) -> bool {
+        match self {
+            Install::AppImage(_) => {
+                file_name(url).is_some_and(|name| appimage_is_for(name, std::env::consts::ARCH))
+            }
+            _ => true,
+        }
+    }
+}
+
+/// Whether an AppImage's file name (`waveflow-quickplay_1.5.0_aarch64.AppImage`)
+/// is the one built for `arch`.
+fn appimage_is_for(name: &str, arch: &str) -> bool {
+    name.ends_with(&format!("_{arch}.AppImage"))
+}
+
+/// The manifest's key for the AppImage built for a processor architecture
+/// (as `std::env::consts::ARCH` names it). None for an architecture no
+/// AppImage is released for: such a copy only hears that a version is out,
+/// it never installs another architecture's.
+fn appimage_platform(arch: &str) -> Option<&'static str> {
+    match arch {
+        "x86_64" => Some("linux-x86_64-appimage"),
+        "aarch64" => Some("linux-aarch64-appimage"),
+        _ => None,
     }
 }
 
@@ -267,6 +298,7 @@ fn check_at(
                     .iter()
                     .filter_map(move |m| Some((v.as_str(), m.platforms.get(p)?)))
             })
+            .filter(|(_, package)| install.takes(&package.url))
             .collect(),
         None => Vec::new(),
     };
@@ -598,6 +630,36 @@ trusted comment: waveflow-quickplay 1.2.3 test.bin
     fn the_signature_names_the_version_and_the_file() {
         assert!(verify(TEST_KEY, TEST_PACKAGE, TEST_SIGNATURE, "9.0.0", "test.bin").is_err());
         assert!(verify(TEST_KEY, TEST_PACKAGE, TEST_SIGNATURE, "1.2.3", "other.bin").is_err());
+    }
+
+    /// Each architecture takes its own AppImage, and one with none takes none.
+    #[test]
+    fn an_appimage_takes_its_own_architecture() {
+        assert_eq!(appimage_platform("x86_64"), Some("linux-x86_64-appimage"));
+        assert_eq!(appimage_platform("aarch64"), Some("linux-aarch64-appimage"));
+        assert_eq!(appimage_platform("riscv64"), None);
+        let image = Install::AppImage("/home/u/Apps/q.AppImage".into());
+        assert_eq!(image.platform(), appimage_platform(std::env::consts::ARCH));
+    }
+
+    /// An AppImage listed under this architecture's key but built for
+    /// another is refused: its signed name says which one it is.
+    #[test]
+    fn an_appimage_of_another_architecture_is_refused() {
+        let x86 = "waveflow-quickplay_1.5.0_x86_64.AppImage";
+        let arm = "waveflow-quickplay_1.5.0_aarch64.AppImage";
+        assert!(appimage_is_for(x86, "x86_64"));
+        assert!(!appimage_is_for(x86, "aarch64"));
+        assert!(appimage_is_for(arm, "aarch64"));
+        assert!(!appimage_is_for(arm, "x86_64"));
+        let image = Install::AppImage("/home/u/Apps/q.AppImage".into());
+        let own = format!(
+            "https://h/r/waveflow-quickplay_1.5.0_{}.AppImage",
+            std::env::consts::ARCH
+        );
+        assert!(image.takes(&own));
+        assert!(!image.takes("https://h/r/waveflow-quickplay_1.5.0_riscv64.AppImage"));
+        assert!(Install::Windows.takes("https://h/r/waveflow-quickplay_1.5.0_x64-setup.exe"));
     }
 
     /// `APPIMAGE` counts only when this executable runs from that image's mount.

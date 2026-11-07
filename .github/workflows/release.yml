@@ -1,6 +1,7 @@
 # Builds the installers for a version tag (`v1.0.0`) and publishes them as a
 # GitHub release: a per-user NSIS installer for Windows, a .deb, an .rpm and
-# an AppImage for Linux, a universal disk image for macOS, with SHA-256
+# an AppImage for Linux on x86_64 and on aarch64 (Arm), a universal disk
+# image for macOS, with SHA-256
 # checksums and the notes from docs/releases/<tag>.md. Nothing is built
 # unless the tag matches Cargo.toml and the tests pass.
 #
@@ -52,6 +53,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       sha: ${{ steps.tag.outputs.sha }}
+      linux: ${{ steps.linux.outputs.legs }}
     steps:
       # The input must name a tag, not a branch that happens to be called
       # v<version>; every job then checks out the commit it points to now,
@@ -73,6 +75,25 @@ jobs:
             exit 1
           fi
           test -f "docs/releases/$RELEASE_TAG.md" || { echo "::error::docs/releases/$RELEASE_TAG.md is missing"; exit 1; }
+      # The Linux legs this version gets. The aarch64 packages start with
+      # 1.5.0: an older version's updater takes the x86_64 AppImage whatever
+      # it runs on, so an Arm build of it would replace itself with one it
+      # cannot run. A manual rebuild of an older tag builds x86_64 only.
+      # From 1.5.0 the updater must know the Arm key, or the Arm AppImage
+      # would never update: its absence stops the release.
+      - id: linux
+        run: |
+          version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          legs='[{"arch":"x86_64","runner":"ubuntu-22.04","sums":"SHA256SUMS-linux.txt"}'
+          if [ "$(printf '%s\n' 1.5.0 "$version" | sort -V | head -1)" = 1.5.0 ]; then
+            if ! grep -q '"linux-aarch64-appimage"' src/update.rs; then
+              echo "::error::src/update.rs does not name linux-aarch64-appimage, the key the Arm AppImage updates from"
+              exit 1
+            fi
+            legs+=',{"arch":"aarch64","runner":"ubuntu-22.04-arm","sums":"SHA256SUMS-linux-aarch64.txt"}'
+          fi
+          echo "legs=$legs]" >> "$GITHUB_OUTPUT"
+          echo "Linux legs: $legs]"
 
   windows:
     name: Windows installer
@@ -206,10 +227,19 @@ jobs:
             target/packager/SHA256SUMS-windows.txt
           if-no-files-found: error
 
+  # One leg per processor, from the version job: GitHub's Arm runners build
+  # the aarch64 packages natively, on the same Ubuntu, so both have the same
+  # glibc floor. The x86_64 checksums keep the file name they had before the
+  # Arm build. One leg failing leaves the other to finish, for its log;
+  # publish still needs both.
   linux:
-    name: Linux packages
+    name: Linux packages (${{ matrix.arch }})
     needs: version
-    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.version.outputs.linux) }}
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     env:
       # linuxdeploy and appimagetool are AppImages themselves; no FUSE on runners.
@@ -276,19 +306,25 @@ jobs:
           rpm -qpl "$rpm" | grep -qx /usr/share/applications/app.waveflow.quickplay.desktop
           rpm -qpR "$rpm" | grep -q 'libasound.so.2'
           rpm -qpR "$rpm" | grep -q 'libc.so.6(GLIBC_'
+      # The AppImage must carry the leg's architecture in its name: that is
+      # how scripts/release/sign-manifest.sh tells the two apart.
       - name: Checksums
+        env:
+          ARCH: ${{ matrix.arch }}
+          SUMS: ${{ matrix.sums }}
         run: |
           cd target/packager
-          sha256sum *.deb *.rpm *.AppImage > SHA256SUMS-linux.txt
-          cat SHA256SUMS-linux.txt
+          ls ./*_"$ARCH".AppImage
+          sha256sum -- *.deb *.rpm *.AppImage > "$SUMS"
+          cat "$SUMS"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: linux
+          name: linux-${{ matrix.arch }}
           path: |
             target/packager/*.deb
             target/packager/*.rpm
             target/packager/*.AppImage
-            target/packager/SHA256SUMS-linux.txt
+            target/packager/${{ matrix.sums }}
           if-no-files-found: error
 
   macos:
