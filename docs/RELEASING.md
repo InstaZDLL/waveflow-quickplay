@@ -94,11 +94,17 @@ than the files.
   git fetch origin --tags && git push gitlab origin/main:refs/heads/main && git push gitlab --tags
   ```
 
-  Nothing runs on those pushes while `QUICKPLAY_GITLAB_CI` is unset. To
-  try the pipeline before a switch, set it to `on`, open a merge request
-  from a throwaway branch, and delete the variable afterwards. Tags up to
-  `v1.5.0` predate the gate: their `.gitlab-ci.yml` runs a release
-  whatever the variable says, so never run or retry a pipeline for them.
+  GitLab reads `.gitlab-ci.yml` from the commit it builds, so the gate
+  holds for every commit that carries it: with `QUICKPLAY_GITLAB_CI`
+  unset, nothing runs on those pushes. To try the pipeline before a
+  switch, set it to `on`, open a merge request from a throwaway branch,
+  and delete the variable afterwards.
+
+  `v1.5.0` predates the gate: its `.gitlab-ci.yml` starts a release
+  whatever the variable says. It is already on GitLab; never run or retry
+  a pipeline for it, and if the project is ever rebuilt, push it with
+  `git push -o ci.skip`. Tags up to `v1.4.0` have no `.gitlab-ci.yml` and
+  start nothing.
 
 - The R2 copy of every release, which the 1.5.0+ builds already read.
 - WaveFlow's own copy,
