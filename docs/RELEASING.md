@@ -96,12 +96,20 @@ than the files.
 
   GitLab reads `.gitlab-ci.yml` from the commit it builds, so the gate
   holds for every commit that carries it: with `QUICKPLAY_GITLAB_CI`
-  unset, nothing runs on those pushes, which this checks without running
-  anything (it should answer "The pipeline did not run"):
+  unset, nothing runs on those pushes. Before a push, this simulates the
+  pipeline of the commit being pushed, without running anything; each
+  check should answer "The pipeline did not run". `--ref` must already
+  exist on GitLab, so a tag not pushed yet is simulated in the context of
+  `v1.5.0`, which is a tag there:
 
   ```bash
-  glab ci lint .gitlab-ci.yml --dry-run --ref main -R waveflow-groupe/waveflow-quickplay
+  check() { git show "$1:.gitlab-ci.yml" > ci-check.yml && glab ci lint ci-check.yml --dry-run --ref "$2" -R waveflow-groupe/waveflow-quickplay; rm -f ci-check.yml; }
+  check origin/main main     # the main about to be pushed
+  check v1.6.0 v1.5.0        # each new tag about to be pushed
   ```
+
+  In Git Bash on Windows, run `export MSYS_NO_PATHCONV=1` first, or it
+  turns `origin/main:.gitlab-ci.yml` into a Windows path.
 
   To try the pipeline before a switch, set the variable to `on`, open a
   merge request from a throwaway branch cut from `main` (which carries the
