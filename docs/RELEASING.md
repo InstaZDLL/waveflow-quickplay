@@ -73,7 +73,10 @@ R2_DRY_RUN=1 TAG_NAME=v1.5.0 bash scripts/release/publish-r2.sh <files dir> <fil
 ## Switching to GitLab
 
 [`.gitlab-ci.yml`](../.gitlab-ci.yml) is a standby copy of `ci.yml` and
-`release.yml`. Nothing runs it on GitHub. It exists so that losing the
+`release.yml`. It stays off until the project variable
+`QUICKPLAY_GITLAB_CI` is `on`: until the switch, the GitLab project is a
+copy, and a tag pushed there would otherwise start a release that rebuilds
+the packages and replaces GitHub's on R2. It exists so that losing the
 GitHub account costs a few hours of setup rather than a rewrite of the
 release pipeline. On GitLab, R2 is the only host: the manifest points
 there directly, and the GitLab release holds links to the files rather
@@ -85,11 +88,64 @@ than the files.
   [`waveflow-groupe/waveflow-quickplay`](https://gitlab.com/waveflow-groupe/waveflow-quickplay),
   with `main` and every tag. It is not a mirror (pull mirroring is a
   Premium feature): refresh it after each release, from a clone whose
-  `gitlab` remote points there:
+  `gitlab` remote points there.
+
+  GitLab reads `.gitlab-ci.yml` from the commit it builds, so the gate
+  holds for every commit that carries it: with `QUICKPLAY_GITLAB_CI`
+  unset, nothing runs on those pushes. The refresh fetches once, simulates
+  the pipeline of each ref it is about to push without running anything,
+  and pushes `main` and the new tags named in `tags`, in one atomic push
+  with no fetch in between, only if GitLab answered "The pipeline did not
+  run" for every one of them. `--ref` must already exist on GitLab, so a
+  tag not pushed yet is simulated in the context of `v1.5.0`, which is a
+  tag there:
 
   ```bash
-  git fetch origin --tags && git push gitlab origin/main:refs/heads/main && git push gitlab --tags
+  export MSYS_NO_PATHCONV=1   # Git Bash on Windows only: keeps rev:path as it is
+  # Succeeds only if GitLab says <rev>'s .gitlab-ci.yml, simulated on <ref>, would not run.
+  blocked() {
+    f=$(mktemp ci-check.XXXXXX) || return
+    git show "$1:.gitlab-ci.yml" > "$f" &&
+      glab ci lint "$f" --dry-run --ref "$2" -R waveflow-groupe/waveflow-quickplay 2>&1 |
+      grep -q 'The pipeline did not run'
+    s=$?; rm -f "$f"; return $s
+  }
+  tags="v1.6.0"               # the new tags, and only them
+  ok=0
+  if git fetch origin --tags; then
+    ok=1
+    blocked origin/main main || ok=0
+    for t in $tags; do blocked "$t" v1.5.0 || ok=0; done
+  fi
+  if [ "$ok" = 1 ]; then
+    git push --atomic gitlab origin/main:refs/heads/main $tags
+  else
+    echo "the fetch failed or a pipeline would run: nothing pushed"
+  fi
   ```
+
+  When a check fails because a ref predates the gate and still has to go
+  there, push it alone with `-o ci.skip`: `main` with
+  `git push -o ci.skip gitlab origin/main:refs/heads/main`, a tag with
+  `git push -o ci.skip gitlab <tag>`. `ci.skip` skips the pipeline of
+  the push itself, for a branch or a tag, not a merge request's: close any
+  merge request whose source is `main` before that push.
+
+  If the project is ever rebuilt empty, there is no `main` to simulate
+  against yet: push `main` and `v1.5.0` first with `-o ci.skip` (below),
+  then refresh as above for everything after them.
+
+  To try the pipeline before a switch, set the variable to `on`, open a
+  merge request from a throwaway branch cut from `main` (which carries the
+  gate), and delete the variable afterwards. Push no tag and no `main` to
+  GitLab while it is on: a tag would start a real release.
+
+  `v1.5.0` predates the gate: its `.gitlab-ci.yml` starts a release
+  whatever the variable says. It is already on GitLab; never run or retry
+  a pipeline for it, and if the project is ever rebuilt, push it before
+  the other tags with
+  `git push -o ci.skip gitlab origin/main:refs/heads/main v1.5.0`. Tags up
+  to `v1.4.0` have no `.gitlab-ci.yml` and start nothing.
 
 - The R2 copy of every release, which the 1.5.0+ builds already read.
 - WaveFlow's own copy,
@@ -149,6 +205,7 @@ run.
 | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_ACCOUNT_ID`, `R2_BUCKET` | `release-publish` | **required** here: R2 is the only host                    |
 | `R2_PUBLIC_URL`                                                          | `*`               | only if the domain is not `https://download.waveflow.app` |
 | `MACOS_RUNNER_TAG`                                                       | `*`               | the tag of your own Mac runner, if not the hosted one     |
+| `QUICKPLAY_GITLAB_CI`                                                    | `*`               | `on` turns the pipelines on; **not protected**, or merge requests from other branches would not see it |
 
 ### What does not carry over
 
@@ -165,10 +222,13 @@ run.
 
 1. Push the latest code and tags to the GitLab project, and WaveFlow's to
    its own.
-2. Point `waveflow-core` at GitLab (above), check that the pipeline of
-   `main` runs green.
-3. Create the variables with their environment scopes and protect the `v*` tags; register runners if the
-   tier needs them.
+2. Create the variables with their environment scopes and protect the `v*`
+   tags; register runners if the tier needs them. Set `QUICKPLAY_GITLAB_CI`
+   to `on` last: from then on a merge request, a `vX.Y.Z` tag or a push to
+   the default branch runs a pipeline; a push to another branch without a
+   merge request runs none.
+3. Point `waveflow-core` at GitLab (above) in a merge request, and check
+   that its pipeline, then `main`'s, runs green.
 4. Release as usual, with the tag pushed to GitLab. Its manifest replaces
    `quickplay/latest.json` on R2, and every 1.5.0+ copy sees it.
 5. Update the install links.

@@ -1,9 +1,10 @@
 # GitLab CI/CD: the standby twin of .github/workflows/ci.yml and release.yml.
 #
-# Nothing runs it while the repository lives on GitHub. It is here so that
-# losing the GitHub account costs a few hours of setup rather than a rewrite
-# of the release pipeline: docs/RELEASING.md#switching-to-gitlab says what
-# to create first, and what this file does not replace.
+# Nothing runs it while the repository lives on GitHub: the workflow below
+# is off until a project variable turns it on. It is here so that losing
+# the GitHub account costs a few hours of setup rather than a rewrite of
+# the release pipeline: docs/RELEASING.md#switching-to-gitlab says what to
+# create first, and what this file does not replace.
 #
 # What it covers:
 #   - on a merge request and on the default branch: the checks of ci.yml
@@ -32,8 +33,15 @@
 #     Mac and set MACOS_RUNNER_TAG to its tag (shell executor, Xcode command
 #     line tools, Homebrew).
 
+# Off until the project variable QUICKPLAY_GITLAB_CI is "on"
+# (docs/RELEASING.md#the-switch-in-order). While GitHub is home, main and
+# the tags are pushed here as a copy: without the gate a tag push would
+# start a release that rebuilds the packages and replaces GitHub's on R2,
+# and each push of main would spend the Free tier's minutes on checks.
 workflow:
   rules:
+    - if: $QUICKPLAY_GITLAB_CI != "on"
+      when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE == "push"
