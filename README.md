@@ -57,7 +57,7 @@
 Download the package for your system from the [latest release](https://github.com/InstaZDLL/waveflow-quickplay/releases/latest):
 
 - **Windows**: `waveflow-quickplay_<version>_x64-setup.exe`. A per-user installer, no administrator rights, that also adds *Play with QuickPlay* and *Add to QuickPlay playlist* to the right-click menu of audio files and folders, and removes them on uninstall. It is signed with WaveFlow's self-signed certificate, so SmartScreen may warn once.
-- **Linux**: a `.deb` for Debian / Ubuntu, an `.rpm` for Fedora / RHEL / openSUSE, or an `.AppImage` for any distribution (make it executable and run it), each for x86_64 PCs (`amd64`, `x86_64` in the file name) and, from 1.5.0, for Arm ones such as a Raspberry Pi 4 or 5 running a 64-bit system (`arm64`, `aarch64`). The `.deb` and the `.rpm` install the desktop entry, so QuickPlay appears in "Open with" for audio files; an AppImage appears there once a tool such as AppImageLauncher or Gear Lever has integrated it.
+- **Linux**: a `.deb` for Debian / Ubuntu, an `.rpm` for Fedora / RHEL / openSUSE, or an `.AppImage` for any distribution (make it executable and run it), each for x86_64 PCs (`amd64`, `x86_64` in the file name) and, from 1.5.0, for Arm ones such as a Raspberry Pi 4 or 5 running a 64-bit system (`arm64`, `aarch64`). The `.deb` and the `.rpm` install the desktop entry, so QuickPlay appears in "Open with" for audio files. An AppImage installs nothing: run it once with `--register` for the same entry, pointing at the `.AppImage` file, and again if you move that file.
 - **macOS**: `waveflow-quickplay_<version>_macos-universal.dmg`, one app for Apple silicon and Intel Macs, macOS 11 or later. Open it and drag *WaveFlow QuickPlay* to Applications. The app is signed ad hoc, not by an Apple Developer ID, so macOS blocks the first launch: open System Settings › Privacy & Security and choose *Open Anyway* (on macOS 14 and earlier, right-click the app and choose *Open*). This is asked on the first launch of each version you download: every release is signed anew.
 
 Then double-click a track, or right-click it. That is the whole setup. On macOS, right-click a track and choose *Open With › WaveFlow QuickPlay*.
@@ -74,7 +74,7 @@ waveflow-quickplay --register                 # file-manager integration, curren
 waveflow-quickplay --unregister
 ```
 
-On Windows and Linux, a hand-copied binary (see [Build and test](#build-and-test)) needs `--register` once, and again if it moves: the registry entries and the `.desktop` file point at the executable's path. The installer does it for you.
+On Windows and Linux, a hand-copied binary (see [Build and test](#build-and-test)) needs `--register` once, and again if it moves: the registry entries and the `.desktop` file point at the executable's path. The installer does it for you. An AppImage needs it too, and its entry points at the `.AppImage` file.
 
 </details>
 

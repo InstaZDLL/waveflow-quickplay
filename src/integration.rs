@@ -21,8 +21,18 @@ use std::path::PathBuf;
 
 use crate::i18n::{Lang, Strings};
 
+/// The path the file manager is given: this executable, or from an
+/// AppImage the AppImage itself.
 fn exe_path() -> io::Result<PathBuf> {
-    let exe = std::env::current_exe()?;
+    registered_path(std::env::current_exe()?, crate::update::appimage())
+}
+
+/// `exe` is this executable, `image` the AppImage it runs from. Inside an
+/// AppImage the executable lives on a mount that goes away with the
+/// process, so an entry pointing there would fail once QuickPlay closes:
+/// the AppImage is what the file manager must start.
+fn registered_path(exe: PathBuf, image: Option<PathBuf>) -> io::Result<PathBuf> {
+    let exe = image.unwrap_or(exe);
     let exe = exe.canonicalize().unwrap_or(exe);
     // The registry and the desktop entry are text: a path that is not
     // Unicode cannot be written into them unchanged, so it is refused
@@ -620,7 +630,85 @@ mod platform {
 
 #[cfg(test)]
 mod tests {
-    use super::strip_verbatim;
+    use super::{registered_path, strip_verbatim};
+    use std::path::PathBuf;
+
+    /// From an AppImage the entry names the image, not the executable on
+    /// its temporary mount; otherwise the executable itself.
+    #[test]
+    fn an_appimage_registers_the_image_not_its_mount() {
+        let exe = || PathBuf::from("/tmp/.mount_waveflXYZ/usr/bin/waveflow-quickplay");
+        assert_eq!(
+            registered_path(
+                exe(),
+                Some("/home/u/Apps/waveflow-quickplay.AppImage".into())
+            )
+            .unwrap(),
+            PathBuf::from("/home/u/Apps/waveflow-quickplay.AppImage")
+        );
+        assert_eq!(
+            registered_path("/usr/bin/waveflow-quickplay".into(), None).unwrap(),
+            PathBuf::from("/usr/bin/waveflow-quickplay")
+        );
+    }
+
+    /// A path the entry cannot hold as text is refused, the AppImage's too.
+    #[cfg(unix)]
+    #[test]
+    fn a_path_that_is_not_unicode_is_refused() {
+        use std::os::unix::ffi::OsStrExt;
+        let image = PathBuf::from(std::ffi::OsStr::from_bytes(b"/home/u/\xff.AppImage"));
+        assert!(registered_path("/usr/bin/waveflow-quickplay".into(), Some(image)).is_err());
+    }
+
+    /// `exe_path` itself takes the AppImage when the runtime's variables
+    /// say this executable runs from its mount, and not otherwise (a
+    /// development build started by an AppImage). The variables are read
+    /// from the environment, which the tests share: each case runs this
+    /// test again in a child process that alone has them.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn exe_path_takes_the_appimage_this_runs_from() {
+        const NAME: &str = "integration::tests::exe_path_takes_the_appimage_this_runs_from";
+        const EXPECTED: &str = "QUICKPLAY_TEST_EXPECTED_EXE";
+        if let Some(expected) = std::env::var_os(EXPECTED) {
+            assert_eq!(super::exe_path().unwrap(), PathBuf::from(expected));
+            return;
+        }
+        let exe = std::env::current_exe().unwrap().canonicalize().unwrap();
+        // A folder made here, so it cannot hold this executable (the
+        // temporary folder itself may, when the build lives under it).
+        let elsewhere = std::env::temp_dir().join(format!("quickplay-test-{}", std::process::id()));
+        std::fs::create_dir(&elsewhere).unwrap();
+        let elsewhere = elsewhere.canonicalize().unwrap();
+        // `appimage()` only accepts an image that is a file.
+        let image = elsewhere.join("waveflow-quickplay.AppImage");
+        std::fs::write(&image, b"").unwrap();
+        let mount = exe.parent().unwrap();
+        let outputs: Vec<_> = [(mount, &image), (elsewhere.as_path(), &exe)]
+            .into_iter()
+            .map(|(appdir, expected)| {
+                std::process::Command::new(&exe)
+                    .args(["--exact", NAME, "--test-threads=1"])
+                    .env("APPDIR", appdir)
+                    .env("APPIMAGE", &image)
+                    .env(EXPECTED, expected)
+                    .output()
+            })
+            .collect();
+        // Removed before anything is asserted, so a failure leaves nothing.
+        let _ = std::fs::remove_dir_all(&elsewhere);
+        for out in outputs {
+            let out = out.unwrap();
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            // "1 passed": the child found this test, rather than none.
+            assert!(
+                out.status.success() && stdout.contains("1 passed"),
+                "{stdout}{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+    }
 
     #[test]
     fn verbatim_prefixes_come_off_shares_included() {
