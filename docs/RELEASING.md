@@ -88,28 +88,34 @@ than the files.
   [`waveflow-groupe/waveflow-quickplay`](https://gitlab.com/waveflow-groupe/waveflow-quickplay),
   with `main` and every tag. It is not a mirror (pull mirroring is a
   Premium feature): refresh it after each release, from a clone whose
-  `gitlab` remote points there:
-
-  ```bash
-  git fetch origin --tags && git push gitlab origin/main:refs/heads/main && git push gitlab --tags
-  ```
+  `gitlab` remote points there.
 
   GitLab reads `.gitlab-ci.yml` from the commit it builds, so the gate
   holds for every commit that carries it: with `QUICKPLAY_GITLAB_CI`
-  unset, nothing runs on those pushes. Before a push, this simulates the
-  pipeline of the commit being pushed, without running anything; each
-  check should answer "The pipeline did not run". `--ref` must already
-  exist on GitLab, so a tag not pushed yet is simulated in the context of
-  `v1.5.0`, which is a tag there:
+  unset, nothing runs on those pushes. The refresh fetches once, simulates
+  the pipeline of what it is about to push without running anything (each
+  check should answer "The pipeline did not run"), then pushes those same
+  refs, with no fetch in between. `--ref` must already exist on GitLab,
+  so a tag not pushed yet is simulated in the context of `v1.5.0`, which
+  is a tag there:
 
   ```bash
-  check() { git show "$1:.gitlab-ci.yml" > ci-check.yml && glab ci lint ci-check.yml --dry-run --ref "$2" -R waveflow-groupe/waveflow-quickplay; rm -f ci-check.yml; }
-  check origin/main main     # the main about to be pushed
-  check v1.6.0 v1.5.0        # each new tag about to be pushed
+  export MSYS_NO_PATHCONV=1   # Git Bash on Windows only: keeps rev:path as it is
+  check() {
+    f=$(mktemp ci-check.XXXXXX) || return
+    git show "$1:.gitlab-ci.yml" > "$f" &&
+      glab ci lint "$f" --dry-run --ref "$2" -R waveflow-groupe/waveflow-quickplay
+    s=$?; rm -f "$f"; return $s
+  }
+  git fetch origin --tags
+  check origin/main main      # the main about to be pushed
+  check v1.6.0 v1.5.0         # each new tag about to be pushed
+  git push gitlab origin/main:refs/heads/main && git push gitlab --tags
   ```
 
-  In Git Bash on Windows, run `export MSYS_NO_PATHCONV=1` first, or it
-  turns `origin/main:.gitlab-ci.yml` into a Windows path.
+  If the project is ever rebuilt empty, there is no `main` to simulate
+  against yet: push `main` and `v1.5.0` first with `-o ci.skip` (below),
+  then refresh as above for everything after them.
 
   To try the pipeline before a switch, set the variable to `on`, open a
   merge request from a throwaway branch cut from `main` (which carries the
@@ -118,9 +124,10 @@ than the files.
 
   `v1.5.0` predates the gate: its `.gitlab-ci.yml` starts a release
   whatever the variable says. It is already on GitLab; never run or retry
-  a pipeline for it, and if the project is ever rebuilt, push it with
-  `git push -o ci.skip gitlab v1.5.0` before the other tags. Tags up to
-  `v1.4.0` have no `.gitlab-ci.yml` and start nothing.
+  a pipeline for it, and if the project is ever rebuilt, push it before
+  the other tags with
+  `git push -o ci.skip gitlab origin/main:refs/heads/main v1.5.0`. Tags up
+  to `v1.4.0` have no `.gitlab-ci.yml` and start nothing.
 
 - The R2 copy of every release, which the 1.5.0+ builds already read.
 - WaveFlow's own copy,
