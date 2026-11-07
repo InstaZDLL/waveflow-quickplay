@@ -96,8 +96,8 @@ test checks the placeholders.
 
 Version in `Cargo.toml`, notes in `docs/releases/v<version>.md`, then a
 `v<version>` tag: `.github/workflows/release.yml` builds the signed Windows
-installer, the `.deb`, the `.rpm` and the AppImage for x86_64 and for Arm
-(aarch64), and the macOS disk image
+installer, the `.deb`, the `.rpm` and the AppImage for x86_64 and, from
+1.5.0, for Arm (aarch64), and the macOS disk image
 (a universal app signed ad hoc, `packaging/macos/bundle.sh`), publishes
 the GitHub release and copies it to R2, the updater's second host.
 Only the maintainers tag. [docs/RELEASING.md](docs/RELEASING.md) lists the
