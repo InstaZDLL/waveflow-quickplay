@@ -110,20 +110,24 @@ than the files.
       grep -q 'The pipeline did not run'
     s=$?; rm -f "$f"; return $s
   }
-  git fetch origin --tags
   tags="v1.6.0"               # the new tags, and only them
-  ok=1
-  blocked origin/main main || ok=0
-  for t in $tags; do blocked "$t" v1.5.0 || ok=0; done
+  ok=0
+  if git fetch origin --tags; then
+    ok=1
+    blocked origin/main main || ok=0
+    for t in $tags; do blocked "$t" v1.5.0 || ok=0; done
+  fi
   if [ "$ok" = 1 ]; then
     git push --atomic gitlab origin/main:refs/heads/main $tags
   else
-    echo "a pipeline would run: nothing pushed"
+    echo "the fetch failed or a pipeline would run: nothing pushed"
   fi
   ```
 
   When a check fails because a ref predates the gate and still has to go
-  there, push that ref alone with `git push -o ci.skip gitlab <ref>`.
+  there, push it alone with `-o ci.skip`: `main` with
+  `git push -o ci.skip gitlab origin/main:refs/heads/main`, a tag with
+  `git push -o ci.skip gitlab <tag>`.
 
   If the project is ever rebuilt empty, there is no `main` to simulate
   against yet: push `main` and `v1.5.0` first with `-o ci.skip` (below),
