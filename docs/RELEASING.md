@@ -93,25 +93,37 @@ than the files.
   GitLab reads `.gitlab-ci.yml` from the commit it builds, so the gate
   holds for every commit that carries it: with `QUICKPLAY_GITLAB_CI`
   unset, nothing runs on those pushes. The refresh fetches once, simulates
-  the pipeline of what it is about to push without running anything (each
-  check should answer "The pipeline did not run"), then pushes those same
-  refs, with no fetch in between. `--ref` must already exist on GitLab,
-  so a tag not pushed yet is simulated in the context of `v1.5.0`, which
-  is a tag there:
+  the pipeline of each ref it is about to push without running anything,
+  and pushes `main` and the new tags named in `tags`, in one atomic push
+  with no fetch in between, only if GitLab answered "The pipeline did not
+  run" for every one of them. `--ref` must already exist on GitLab, so a
+  tag not pushed yet is simulated in the context of `v1.5.0`, which is a
+  tag there:
 
   ```bash
   export MSYS_NO_PATHCONV=1   # Git Bash on Windows only: keeps rev:path as it is
-  check() {
+  # Succeeds only if GitLab says <rev>'s .gitlab-ci.yml, simulated on <ref>, would not run.
+  blocked() {
     f=$(mktemp ci-check.XXXXXX) || return
     git show "$1:.gitlab-ci.yml" > "$f" &&
-      glab ci lint "$f" --dry-run --ref "$2" -R waveflow-groupe/waveflow-quickplay
+      glab ci lint "$f" --dry-run --ref "$2" -R waveflow-groupe/waveflow-quickplay 2>&1 |
+      grep -q 'The pipeline did not run'
     s=$?; rm -f "$f"; return $s
   }
   git fetch origin --tags
-  check origin/main main      # the main about to be pushed
-  check v1.6.0 v1.5.0         # each new tag about to be pushed
-  git push gitlab origin/main:refs/heads/main && git push gitlab --tags
+  tags="v1.6.0"               # the new tags, and only them
+  ok=1
+  blocked origin/main main || ok=0
+  for t in $tags; do blocked "$t" v1.5.0 || ok=0; done
+  if [ "$ok" = 1 ]; then
+    git push --atomic gitlab origin/main:refs/heads/main $tags
+  else
+    echo "a pipeline would run: nothing pushed"
+  fi
   ```
+
+  When a check fails because a ref predates the gate and still has to go
+  there, push that ref alone with `git push -o ci.skip gitlab <ref>`.
 
   If the project is ever rebuilt empty, there is no `main` to simulate
   against yet: push `main` and `v1.5.0` first with `-o ci.skip` (below),
