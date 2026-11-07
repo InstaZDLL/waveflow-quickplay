@@ -326,9 +326,15 @@ packages all fail is passed over for the next, so a host announcing a
 version that does not exist cannot hold back a real one. The
 manifest gives the version and, per package QuickPlay can install by
 itself, its URL and its minisign signature: `windows-x86_64` (the NSIS
-installer), `darwin-universal` (the disk image) and
-`linux-x86_64-appimage`. The release workflow signs each with the release
-key (secret `QUICKPLAY_UPDATE_KEY`; the public half is `PUBLIC_KEY` in the
+installer), `darwin-universal` (the disk image), `linux-x86_64-appimage`
+and, from 1.5.0, `linux-aarch64-appimage`. An AppImage takes the key of
+the architecture it runs on, and only a file whose signed name ends with
+that architecture (`_aarch64.AppImage`), so a host cannot list one
+architecture's genuine package under the other's key. An AppImage built
+for an architecture no AppImage is released for only hears that a version
+is out. Before 1.5.0 every AppImage took the x86_64 one, which is why no
+older version gets an Arm build. The release workflow signs each with the
+release key (secret `QUICKPLAY_UPDATE_KEY`; the public half is `PUBLIC_KEY` in the
 module) under the trusted comment `waveflow-quickplay <version> <file>`.
 The manifest itself is not signed, so the app checks that comment against
 the version and the file name it was given: a genuine older package cannot

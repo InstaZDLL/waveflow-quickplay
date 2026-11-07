@@ -110,7 +110,8 @@ Some of it needs GitHub to still answer:
 
 ### Runners
 
-GitLab.com's hosted runners: Linux (`saas-linux-medium-amd64`) and Windows
+GitLab.com's hosted runners: Linux (`saas-linux-medium-amd64`, and
+`saas-linux-small-arm64` for the Arm packages) and Windows
 (`saas-windows-medium-amd64`, beta) on every tier; macOS
 (`saas-macos-medium-m1`) on Premium and Ultimate only, or through the
 GitLab for Open Source program. The Free tier's 400 compute minutes a month

@@ -120,6 +120,25 @@ impl Install {
             Install::Elsewhere => None,
         }
     }
+
+    /// Whether this copy can take the package at `url`. The manifest is not
+    /// signed, so a host could list the x86_64 AppImage, genuinely signed,
+    /// under the aarch64 key; the file name is signed, and cargo-packager
+    /// ends it with the architecture, so an AppImage must name this one.
+    fn takes(&self, url: &str) -> bool {
+        match self {
+            Install::AppImage(_) => {
+                file_name(url).is_some_and(|name| appimage_is_for(name, std::env::consts::ARCH))
+            }
+            _ => true,
+        }
+    }
+}
+
+/// Whether an AppImage's file name (`waveflow-quickplay_1.5.0_aarch64.AppImage`)
+/// is the one built for `arch`.
+fn appimage_is_for(name: &str, arch: &str) -> bool {
+    name.ends_with(&format!("_{arch}.AppImage"))
 }
 
 /// The manifest's key for the AppImage built for a processor architecture
@@ -279,6 +298,7 @@ fn check_at(
                     .iter()
                     .filter_map(move |m| Some((v.as_str(), m.platforms.get(p)?)))
             })
+            .filter(|(_, package)| install.takes(&package.url))
             .collect(),
         None => Vec::new(),
     };
@@ -620,6 +640,26 @@ trusted comment: waveflow-quickplay 1.2.3 test.bin
         assert_eq!(appimage_platform("riscv64"), None);
         let image = Install::AppImage("/home/u/Apps/q.AppImage".into());
         assert_eq!(image.platform(), appimage_platform(std::env::consts::ARCH));
+    }
+
+    /// An AppImage listed under this architecture's key but built for
+    /// another is refused: its signed name says which one it is.
+    #[test]
+    fn an_appimage_of_another_architecture_is_refused() {
+        let x86 = "waveflow-quickplay_1.5.0_x86_64.AppImage";
+        let arm = "waveflow-quickplay_1.5.0_aarch64.AppImage";
+        assert!(appimage_is_for(x86, "x86_64"));
+        assert!(!appimage_is_for(x86, "aarch64"));
+        assert!(appimage_is_for(arm, "aarch64"));
+        assert!(!appimage_is_for(arm, "x86_64"));
+        let image = Install::AppImage("/home/u/Apps/q.AppImage".into());
+        let own = format!(
+            "https://h/r/waveflow-quickplay_1.5.0_{}.AppImage",
+            std::env::consts::ARCH
+        );
+        assert!(image.takes(&own));
+        assert!(!image.takes("https://h/r/waveflow-quickplay_1.5.0_riscv64.AppImage"));
+        assert!(Install::Windows.takes("https://h/r/waveflow-quickplay_1.5.0_x64-setup.exe"));
     }
 
     /// `APPIMAGE` counts only when this executable runs from that image's mount.
