@@ -127,9 +127,9 @@ than the files.
   When a check fails because a ref predates the gate and still has to go
   there, push it alone with `-o ci.skip`: `main` with
   `git push -o ci.skip gitlab origin/main:refs/heads/main`, a tag with
-  `git push -o ci.skip gitlab <tag>`. `ci.skip` skips only the branch
-  pipeline, not a merge request's: close any merge request whose source is
-  `main` before that push.
+  `git push -o ci.skip gitlab <tag>`. `ci.skip` skips the pipeline of
+  the push itself, for a branch or a tag, not a merge request's: close any
+  merge request whose source is `main` before that push.
 
   If the project is ever rebuilt empty, there is no `main` to simulate
   against yet: push `main` and `v1.5.0` first with `-o ci.skip` (below),
