@@ -79,10 +79,17 @@ jobs:
       # 1.5.0: an older version's updater takes the x86_64 AppImage whatever
       # it runs on, so an Arm build of it would replace itself with one it
       # cannot run. A manual rebuild of an older tag builds x86_64 only.
+      # From 1.5.0 the updater must know the Arm key, or the Arm AppImage
+      # would never update: its absence stops the release.
       - id: linux
         run: |
+          version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
           legs='[{"arch":"x86_64","runner":"ubuntu-22.04","sums":"SHA256SUMS-linux.txt"}'
-          if grep -q '"linux-aarch64-appimage"' src/update.rs; then
+          if [ "$(printf '%s\n' 1.5.0 "$version" | sort -V | head -1)" = 1.5.0 ]; then
+            if ! grep -q '"linux-aarch64-appimage"' src/update.rs; then
+              echo "::error::src/update.rs does not name linux-aarch64-appimage, the key the Arm AppImage updates from"
+              exit 1
+            fi
             legs+=',{"arch":"aarch64","runner":"ubuntu-22.04-arm","sums":"SHA256SUMS-linux-aarch64.txt"}'
           fi
           echo "legs=$legs]" >> "$GITHUB_OUTPUT"
@@ -223,11 +230,13 @@ jobs:
   # One leg per processor, from the version job: GitHub's Arm runners build
   # the aarch64 packages natively, on the same Ubuntu, so both have the same
   # glibc floor. The x86_64 checksums keep the file name they had before the
-  # Arm build.
+  # Arm build. One leg failing leaves the other to finish, for its log;
+  # publish still needs both.
   linux:
     name: Linux packages (${{ matrix.arch }})
     needs: version
     strategy:
+      fail-fast: false
       matrix:
         include: ${{ fromJSON(needs.version.outputs.linux) }}
     runs-on: ${{ matrix.runner }}
