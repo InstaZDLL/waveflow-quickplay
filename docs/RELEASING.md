@@ -73,7 +73,10 @@ R2_DRY_RUN=1 TAG_NAME=v1.5.0 bash scripts/release/publish-r2.sh <files dir> <fil
 ## Switching to GitLab
 
 [`.gitlab-ci.yml`](../.gitlab-ci.yml) is a standby copy of `ci.yml` and
-`release.yml`. Nothing runs it on GitHub. It exists so that losing the
+`release.yml`. It stays off until the project variable
+`QUICKPLAY_GITLAB_CI` is `on`: until the switch, the GitLab project is a
+copy, and a tag pushed there would otherwise start a release that rebuilds
+the packages and replaces GitHub's on R2. It exists so that losing the
 GitHub account costs a few hours of setup rather than a rewrite of the
 release pipeline. On GitLab, R2 is the only host: the manifest points
 there directly, and the GitLab release holds links to the files rather
@@ -90,6 +93,12 @@ than the files.
   ```bash
   git fetch origin --tags && git push gitlab origin/main:refs/heads/main && git push gitlab --tags
   ```
+
+  Nothing runs on those pushes while `QUICKPLAY_GITLAB_CI` is unset. To
+  try the pipeline before a switch, set it to `on`, open a merge request
+  from a throwaway branch, and delete the variable afterwards. Tags up to
+  `v1.5.0` predate the gate: their `.gitlab-ci.yml` runs a release
+  whatever the variable says, so never run or retry a pipeline for them.
 
 - The R2 copy of every release, which the 1.5.0+ builds already read.
 - WaveFlow's own copy,
@@ -149,6 +158,7 @@ run.
 | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_ACCOUNT_ID`, `R2_BUCKET` | `release-publish` | **required** here: R2 is the only host                    |
 | `R2_PUBLIC_URL`                                                          | `*`               | only if the domain is not `https://download.waveflow.app` |
 | `MACOS_RUNNER_TAG`                                                       | `*`               | the tag of your own Mac runner, if not the hosted one     |
+| `QUICKPLAY_GITLAB_CI`                                                    | `*`               | `on` turns the pipelines on; **not protected**, or merge requests from other branches would not see it |
 
 ### What does not carry over
 
@@ -165,10 +175,11 @@ run.
 
 1. Push the latest code and tags to the GitLab project, and WaveFlow's to
    its own.
-2. Point `waveflow-core` at GitLab (above), check that the pipeline of
-   `main` runs green.
-3. Create the variables with their environment scopes and protect the `v*` tags; register runners if the
-   tier needs them.
+2. Create the variables with their environment scopes and protect the `v*`
+   tags; register runners if the tier needs them. Set `QUICKPLAY_GITLAB_CI`
+   to `on` last: from then on every push runs a pipeline.
+3. Point `waveflow-core` at GitLab (above) in a merge request, and check
+   that its pipeline, then `main`'s, runs green.
 4. Release as usual, with the tag pushed to GitLab. Its manifest replaces
    `quickplay/latest.json` on R2, and every 1.5.0+ copy sees it.
 5. Update the install links.
