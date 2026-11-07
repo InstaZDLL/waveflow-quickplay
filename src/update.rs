@@ -116,9 +116,21 @@ impl Install {
         match self {
             Install::Windows => Some("windows-x86_64"),
             Install::MacApp(_) => Some("darwin-universal"),
-            Install::AppImage(_) => Some("linux-x86_64-appimage"),
+            Install::AppImage(_) => appimage_platform(std::env::consts::ARCH),
             Install::Elsewhere => None,
         }
+    }
+}
+
+/// The manifest's key for the AppImage built for a processor architecture
+/// (as `std::env::consts::ARCH` names it). None for an architecture no
+/// AppImage is released for: such a copy only hears that a version is out,
+/// it never installs another architecture's.
+fn appimage_platform(arch: &str) -> Option<&'static str> {
+    match arch {
+        "x86_64" => Some("linux-x86_64-appimage"),
+        "aarch64" => Some("linux-aarch64-appimage"),
+        _ => None,
     }
 }
 
@@ -598,6 +610,16 @@ trusted comment: waveflow-quickplay 1.2.3 test.bin
     fn the_signature_names_the_version_and_the_file() {
         assert!(verify(TEST_KEY, TEST_PACKAGE, TEST_SIGNATURE, "9.0.0", "test.bin").is_err());
         assert!(verify(TEST_KEY, TEST_PACKAGE, TEST_SIGNATURE, "1.2.3", "other.bin").is_err());
+    }
+
+    /// Each architecture takes its own AppImage, and one with none takes none.
+    #[test]
+    fn an_appimage_takes_its_own_architecture() {
+        assert_eq!(appimage_platform("x86_64"), Some("linux-x86_64-appimage"));
+        assert_eq!(appimage_platform("aarch64"), Some("linux-aarch64-appimage"));
+        assert_eq!(appimage_platform("riscv64"), None);
+        let image = Install::AppImage("/home/u/Apps/q.AppImage".into());
+        assert_eq!(image.platform(), appimage_platform(std::env::consts::ARCH));
     }
 
     /// `APPIMAGE` counts only when this executable runs from that image's mount.

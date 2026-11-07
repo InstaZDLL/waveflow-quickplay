@@ -1,7 +1,7 @@
-# Format, lint and test on every push and pull request, on the three
-# platforms QuickPlay is released for. The toolchain comes from
-# rust-toolchain.toml; waveflow-core is fetched from the pinned WaveFlow
-# commit.
+# Format, lint and test on every push and pull request, on the platforms
+# QuickPlay is released for (Linux on x86_64 and on Arm). The toolchain
+# comes from rust-toolchain.toml; waveflow-core is fetched from the pinned
+# WaveFlow commit.
 name: CI
 
 on:
@@ -22,7 +22,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-24.04, macos-latest]
+        os: [windows-latest, ubuntu-24.04, ubuntu-24.04-arm, macos-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:

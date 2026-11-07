@@ -21,7 +21,9 @@
 # (then copied to R2), here straight at R2, the only host there is.
 #
 # Runners (GitLab.com hosted, https://docs.gitlab.com/ci/runners/hosted_runners/):
-#   - Linux: saas-linux-medium-amd64 (4 vCPU, 16 GB), on every tier.
+#   - Linux: saas-linux-medium-amd64 (4 vCPU, 16 GB), on every tier; for
+#     the Arm packages saas-linux-small-arm64 (2 vCPU, 8 GB), the only Arm
+#     runner on the Free tier.
 #   - Windows: saas-windows-medium-amd64 (2 vCPU, 7.5 GB), on every tier, in
 #     beta. PowerShell, no `image:`; Visual Studio Build Tools, CMake and
 #     Git are preinstalled, Rust is not.
@@ -237,12 +239,22 @@ sign-windows:
     expire_in: 1 week
 
 # Ubuntu 22.04, as release.yml: the packages need at least the glibc the
-# binary was linked against.
+# binary was linked against. One job per processor, as release.yml's matrix;
+# the Arm one runs on the small Arm runner, the only one on every tier.
 release-linux:
-  extends: [.release-rules, .linux-medium]
+  extends: .release-rules
   stage: build
   needs: [version]
   image: ubuntu:22.04
+  parallel:
+    matrix:
+      - ARCH: x86_64
+        RUNNER: saas-linux-medium-amd64
+        SUMS: SHA256SUMS-linux.txt
+      - ARCH: aarch64
+        RUNNER: saas-linux-small-arm64
+        SUMS: SHA256SUMS-linux-aarch64.txt
+  tags: [$RUNNER]
   timeout: 2h
   variables:
     DEBIAN_FRONTEND: noninteractive
@@ -278,13 +290,16 @@ release-linux:
       rpm -qpl "$rpm" | grep -qx /usr/share/applications/app.waveflow.quickplay.desktop
       rpm -qpR "$rpm" | grep -q 'libasound.so.2'
       rpm -qpR "$rpm" | grep -q 'libc.so.6(GLIBC_'
-    - cd target/packager && sha256sum *.deb *.rpm *.AppImage > SHA256SUMS-linux.txt && cat SHA256SUMS-linux.txt
+    # The AppImage carries the job's architecture in its name, which
+    # scripts/release/sign-manifest.sh goes by.
+    - cd target/packager && ls ./*_"$ARCH".AppImage
+    - sha256sum *.deb *.rpm *.AppImage > "$SUMS" && cat "$SUMS"
   artifacts:
     paths:
       - target/packager/*.deb
       - target/packager/*.rpm
       - target/packager/*.AppImage
-      - target/packager/SHA256SUMS-linux.txt
+      - target/packager/$SUMS
     expire_in: 1 week
 
 release-macos:

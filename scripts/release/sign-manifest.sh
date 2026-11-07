@@ -62,7 +62,12 @@ sign() {
     '.platforms[$p] = {url: $url, signature: $sig}' <<<"$manifest")"
 }
 
-sign linux-x86_64-appimage "$dist/*.AppImage"
+sign linux-x86_64-appimage "$dist/*_x86_64.AppImage"
+# The Arm AppImage exists from 1.5.0 on: older versions' updater takes the
+# x86_64 one whatever it runs on, so none is built for them.
+if compgen -G "$dist/*_aarch64.AppImage" >/dev/null; then
+  sign linux-aarch64-appimage "$dist/*_aarch64.AppImage"
+fi
 if [ "${LINUX_ONLY:-false}" != "true" ]; then
   sign windows-x86_64 "$dist/*.exe"
   sign darwin-universal "$dist/*.dmg"
