@@ -177,7 +177,9 @@ run.
    its own.
 2. Create the variables with their environment scopes and protect the `v*`
    tags; register runners if the tier needs them. Set `QUICKPLAY_GITLAB_CI`
-   to `on` last: from then on every push runs a pipeline.
+   to `on` last: from then on a merge request, a `vX.Y.Z` tag or a push to
+   the default branch runs a pipeline; a push to another branch without a
+   merge request runs none.
 3. Point `waveflow-core` at GitLab (above) in a merge request, and check
    that its pipeline, then `main`'s, runs green.
 4. Release as usual, with the tag pushed to GitLab. Its manifest replaces
