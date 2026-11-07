@@ -676,13 +676,15 @@ mod tests {
             return;
         }
         let exe = std::env::current_exe().unwrap().canonicalize().unwrap();
+        // A folder made here, so it cannot hold this executable (the
+        // temporary folder itself may, when the build lives under it).
+        let elsewhere = std::env::temp_dir().join(format!("quickplay-test-{}", std::process::id()));
+        std::fs::create_dir(&elsewhere).unwrap();
+        let elsewhere = elsewhere.canonicalize().unwrap();
         // `appimage()` only accepts an image that is a file.
-        let image =
-            std::env::temp_dir().join(format!("quickplay-test-{}.AppImage", std::process::id()));
+        let image = elsewhere.join("waveflow-quickplay.AppImage");
         std::fs::write(&image, b"").unwrap();
-        let image = image.canonicalize().unwrap();
         let mount = exe.parent().unwrap();
-        let elsewhere = std::env::temp_dir().canonicalize().unwrap();
         let outputs: Vec<_> = [(mount, &image), (elsewhere.as_path(), &exe)]
             .into_iter()
             .map(|(appdir, expected)| {
@@ -695,7 +697,7 @@ mod tests {
             })
             .collect();
         // Removed before anything is asserted, so a failure leaves nothing.
-        let _ = std::fs::remove_file(&image);
+        let _ = std::fs::remove_dir_all(&elsewhere);
         for out in outputs {
             let out = out.unwrap();
             let stdout = String::from_utf8_lossy(&out.stdout);
