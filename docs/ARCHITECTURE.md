@@ -32,7 +32,8 @@ waveflow-quickplay
    ├── src/waveflow.rs    finds WaveFlow, hands the playback over to it (core's `handoff`)
    ├── src/update.rs      update check at launch, signed download, install on close
    ├── src/restart.rs     restart under the other window system for the pin (Wayland)
-   ├── src/integration.rs --register / --unregister (registry verbs, .desktop file)
+   ├── src/integration.rs --register / --unregister (registry verbs, ProgIDs, .desktop file)
+   ├── src/file_icons.rs  Windows: document icon resource ids per type (shared with build.rs)
    ├── src/drop_verb.rs   Windows: Explorer's verbs as COM drop targets, one process per selection
    ├── src/platform.rs    Windows: owner link between the playlist window and the player
    ├── src/macos.rs       macOS: the files Finder opens (application:openURLs:)
@@ -258,6 +259,20 @@ the paths to the usual start: over the socket to the running player, or a
 window of its own. A launch that is dropped nothing exits after thirty
 seconds. Registration deletes the `command` keys of earlier versions, so
 an upgrade does not keep the per-file command.
+Each extension also gets a ProgID of its own (`WaveFlowQuickPlay.flac`, …),
+named in the type's `OpenWithProgids`, and the `Applications` key gets
+`Capabilities` listed under `RegisteredApplications`, which is what puts
+QuickPlay in Settings › Default apps. Windows takes a file's icon and its
+"Type" label from the ProgID of its default handler; the `Applications`
+entry alone has one icon for every type. Each ProgID's `DefaultIcon` is
+`"exe",-{id}`: `build.rs` embeds the document icons of
+`assets/file-icons/` as icon resources, the ids in `src/file_icons.rs`
+(shared with `build.rs` through `include!`; never renumbered, since the
+registry holds them). The application icon keeps id 1, the lowest, so it
+stays the executable's. `--unregister` deletes the ProgIDs whole but only
+our values from `OpenWithProgids` and `RegisteredApplications`, which other
+applications share. Linux has no equivalent worth having: a file's icon
+there comes from the icon theme's MIME type, whatever the default player.
 The labels come from the interface language; the desktop entry carries all
 of them, and on Windows a language picked in the settings rewrites the
 registry labels when the running executable is the registered one (checked

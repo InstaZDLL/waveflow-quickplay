@@ -6,8 +6,10 @@
 //!   `DropTarget` on a COM class the executable serves (src/drop_verb.rs),
 //!   so a selection of any size reaches one process; plus an
 //!   `Applications\waveflow-quickplay.exe` entry so the player shows in
-//!   "Open with". The default handler is left alone: that is the user's
-//!   choice in Settings › Default apps.
+//!   "Open with", one ProgID per extension carrying that format's document
+//!   icon (src/file_icons.rs), and the capabilities that list QuickPlay in
+//!   Settings › Default apps. The default handler is left alone: that is
+//!   the user's choice there.
 //! - Linux: a `.desktop` file with the audio MIME types and an "Add to
 //!   playlist" action, plus the icon, under `~/.local/share`.
 //! - macOS: nothing to write. The app bundle declares the audio types in
@@ -102,10 +104,52 @@ mod platform {
     const LEGACY_ENQUEUE_VERB: &str = "WaveFlowQuickPlay.Enqueue";
     const APP_KEY: &str = r"HKEY_CURRENT_USER\Software\Classes\Applications\waveflow-quickplay.exe";
     const CLSID_KEY: &str = r"HKEY_CURRENT_USER\Software\Classes\CLSID";
+    const CLASSES_KEY: &str = r"HKEY_CURRENT_USER\Software\Classes";
+    /// Where Settings › Default apps finds the registered players. The
+    /// value is shared with every other application: only ours is written
+    /// and removed, never the key.
+    const REGISTERED_APPS_KEY: &str = r"HKEY_CURRENT_USER\Software\RegisteredApplications";
+    const REGISTERED_APP_NAME: &str = "WaveFlow QuickPlay";
+    /// Under [`APP_KEY`], so removing that key takes it too; given to
+    /// `RegisteredApplications` relative to HKCU.
+    const CAPABILITIES_PATH: &str =
+        r"Software\Classes\Applications\waveflow-quickplay.exe\Capabilities";
 
     /// `.reg` string syntax: backslashes and quotes escaped.
     fn reg_str(s: &str) -> String {
         format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+    }
+
+    /// The ProgID of one extension. Windows takes a type's icon and its
+    /// "Type" label from the ProgID of its default handler, so one per
+    /// extension is what lets a FLAC look like a FLAC once QuickPlay plays
+    /// it; the `Applications` entry has a single icon for every type.
+    fn prog_id(ext: &str) -> String {
+        format!("WaveFlowQuickPlay.{ext}")
+    }
+
+    /// Resource id of `ext`'s document icon in the executable (build.rs);
+    /// the generic audio document for an extension without its own.
+    fn icon_id(ext: &str) -> u16 {
+        use crate::file_icons::{FILE_ICONS, FILE_ICON_ALIASES, GENERIC_FILE_ICON};
+        let stem = FILE_ICON_ALIASES
+            .iter()
+            .find(|(alias, _)| alias.eq_ignore_ascii_case(ext))
+            .map_or(ext, |(_, stem)| stem);
+        FILE_ICONS
+            .iter()
+            .find(|(s, _)| s.eq_ignore_ascii_case(stem))
+            .map_or(GENERIC_FILE_ICON, |(_, id)| *id)
+    }
+
+    /// Explorer's "Type" label for `ext`, in the registration language.
+    fn type_label(ext: &str, t: &Strings) -> String {
+        let template = if crate::library::PLAYLIST_EXTENSIONS.contains(&ext) {
+            t.file_type_playlist
+        } else {
+            t.file_type_audio
+        };
+        crate::i18n::fill(template, &[("ext", &ext.to_ascii_uppercase())])
     }
 
     fn verb_keys(t: &Strings) -> Vec<(String, &'static str, &'static str)> {
@@ -188,6 +232,34 @@ mod platform {
             s.push_str(&format!("\".{ext}\"=\"\"\r\n"));
         }
         s.push_str("\r\n");
+        // One ProgID per type, with its document icon, and the type's
+        // `OpenWithProgids` naming it. REG_NONE, as Windows documents.
+        let open = reg_str(&format!("\"{exe}\" \"%1\""));
+        for ext in crate::library::openable_extensions() {
+            let id = prog_id(ext);
+            s.push_str(&format!(
+                "[{CLASSES_KEY}\\{id}]\r\n@={}\r\n\r\n[{CLASSES_KEY}\\{id}\\DefaultIcon]\r\n@={}\r\n\r\n[{CLASSES_KEY}\\{id}\\shell\\open\\command]\r\n@={open}\r\n\r\n[{CLASSES_KEY}\\.{ext}\\OpenWithProgids]\r\n\"{id}\"=hex(0):\r\n\r\n",
+                reg_str(&type_label(ext, t)),
+                reg_str(&format!("\"{exe}\",-{}", icon_id(ext))),
+            ));
+        }
+        // Settings › Default apps lists the players named under
+        // `RegisteredApplications`, with the types their capabilities map
+        // to a ProgID; picking QuickPlay there sets those ProgIDs.
+        s.push_str(&format!(
+            "[{APP_KEY}\\Capabilities]\r\n\"ApplicationName\"={}\r\n\"ApplicationDescription\"={}\r\n\"ApplicationIcon\"={}\r\n\r\n[{APP_KEY}\\Capabilities\\FileAssociations]\r\n",
+            reg_str(REGISTERED_APP_NAME),
+            reg_str(t.desktop_comment),
+            reg_str(&format!("{exe},0")),
+        ));
+        for ext in crate::library::openable_extensions() {
+            s.push_str(&format!("\".{ext}\"={}\r\n", reg_str(&prog_id(ext))));
+        }
+        s.push_str(&format!(
+            "\r\n[{REGISTERED_APPS_KEY}]\r\n{}={}\r\n\r\n",
+            reg_str(REGISTERED_APP_NAME),
+            reg_str(CAPABILITIES_PATH)
+        ));
         s
     }
 
@@ -204,6 +276,20 @@ mod platform {
             s.push_str(&format!("[-{CLSID_KEY}\\{clsid}]\r\n\r\n"));
         }
         s.push_str(&format!("[-{APP_KEY}]\r\n\r\n"));
+        // The ProgIDs are ours and go whole. `.ext\OpenWithProgids` and
+        // `RegisteredApplications` are shared: only our value goes (`.reg`
+        // has no way to drop a key only once it is empty, so an
+        // `OpenWithProgids` key this registration created stays, empty).
+        for ext in crate::library::openable_extensions() {
+            let id = prog_id(ext);
+            s.push_str(&format!(
+                "[-{CLASSES_KEY}\\{id}]\r\n\r\n[{CLASSES_KEY}\\.{ext}\\OpenWithProgids]\r\n\"{id}\"=-\r\n\r\n"
+            ));
+        }
+        s.push_str(&format!(
+            "[{REGISTERED_APPS_KEY}]\r\n{}=-\r\n\r\n",
+            reg_str(REGISTERED_APP_NAME)
+        ));
         s
     }
 
@@ -325,7 +411,7 @@ mod platform {
         import(&registration_script(exe, t))?;
         notify_shell();
         Ok(format!(
-            "registered for the current user: \"{}\" and \"{}\" on {} audio and playlist extensions and on folders, plus an \"Open with\" entry ({}).",
+            "registered for the current user: \"{}\" and \"{}\" on {} audio and playlist extensions and on folders, plus an \"Open with\" entry and a Default apps entry with one icon per type ({}).",
             t.action_play_with,
             t.action_add_to_playlist,
             crate::library::openable_extensions().len(),
@@ -337,7 +423,7 @@ mod platform {
         import(&removal_script())?;
         notify_shell();
         Ok(
-            "removed the context-menu verbs and the \"Open with\" entry for the current user."
+            "removed the context-menu verbs, the \"Open with\" entry and the Default apps entry for the current user."
                 .into(),
         )
     }
@@ -400,8 +486,15 @@ mod platform {
             }
         }
 
+        /// Shared with other applications: the removal takes our values
+        /// out of these keys, never the keys.
+        fn is_shared_key(key: &str) -> bool {
+            key == REGISTERED_APPS_KEY || key.ends_with(r"\OpenWithProgids")
+        }
+
         /// Everything the registration writes, the removal takes away: each
-        /// key it creates sits under one the removal deletes.
+        /// key it creates sits under one the removal deletes, and each value
+        /// it puts in a shared key is deleted from that key.
         #[test]
         fn removal_covers_every_registered_key() {
             let s = registration_script(
@@ -413,17 +506,107 @@ mod platform {
                 .lines()
                 .filter_map(|l| l.strip_prefix("[-")?.strip_suffix(']'))
                 .collect();
-            for key in s
-                .lines()
-                .filter(|l| l.starts_with("[HKEY"))
-                .map(|l| l.trim_matches(['[', ']']))
-            {
+            let mut shared_values = 0;
+            let mut key = "";
+            for line in s.lines() {
+                if line.starts_with("[HKEY") {
+                    key = line.trim_matches(['[', ']']);
+                    if !is_shared_key(key) {
+                        assert!(
+                            removed
+                                .iter()
+                                .any(|r| key == *r || key.starts_with(&format!("{r}\\"))),
+                            "{key} is not removed"
+                        );
+                    }
+                } else if is_shared_key(key) && line.starts_with('"') {
+                    let name = &line[..line.find("\"=").expect("a value line") + 1];
+                    assert!(
+                        removal.contains(&format!("[{key}]\r\n{name}=-\r\n")),
+                        "{name} in {key} is not removed"
+                    );
+                    shared_values += 1;
+                }
+            }
+            assert_eq!(
+                shared_values,
+                crate::library::openable_extensions().len() + 1
+            );
+            // A shared key is never deleted whole.
+            assert!(!removed.iter().any(|r| is_shared_key(r)));
+            assert!(!removed.iter().any(|r| r.ends_with(r"\.flac")));
+        }
+
+        /// Each type gets a ProgID with its own document icon, a label in
+        /// the registration language, and a place in Default apps.
+        #[test]
+        fn every_type_has_a_prog_id_with_its_icon() {
+            let s = registration_script(
+                std::path::Path::new(r"C:\QP\waveflow-quickplay.exe"),
+                Lang::Fr.strings(),
+            );
+            for ext in crate::library::openable_extensions() {
+                let id = prog_id(ext);
+                assert!(s.contains(&format!(
+                    "[{CLASSES_KEY}\\{id}\\DefaultIcon]\r\n@=\"\\\"C:\\\\QP\\\\waveflow-quickplay.exe\\\",-{}\"\r\n",
+                    icon_id(ext)
+                )));
+                assert!(s.contains(&format!(
+                    "[{CLASSES_KEY}\\{id}\\shell\\open\\command]\r\n@=\"\\\"C:\\\\QP\\\\waveflow-quickplay.exe\\\" \\\"%1\\\"\"\r\n"
+                )));
+                assert!(s.contains(&format!(
+                    "[{CLASSES_KEY}\\.{ext}\\OpenWithProgids]\r\n\"{id}\"=hex(0):\r\n"
+                )));
+                assert!(s.contains(&format!("\".{ext}\"=\"{id}\"\r\n")));
+            }
+            assert!(s.contains(&format!(
+                "[{CLASSES_KEY}\\WaveFlowQuickPlay.flac]\r\n@=\"Fichier audio FLAC\"\r\n"
+            )));
+            assert!(s.contains(&format!(
+                "[{CLASSES_KEY}\\WaveFlowQuickPlay.m3u8]\r\n@=\"Liste de lecture M3U8\"\r\n"
+            )));
+            assert!(s.contains(
+                "[HKEY_CURRENT_USER\\Software\\RegisteredApplications]\r\n\"WaveFlow QuickPlay\"=\"Software\\\\Classes\\\\Applications\\\\waveflow-quickplay.exe\\\\Capabilities\"\r\n"
+            ));
+            assert!(s.contains(&format!("[{APP_KEY}\\Capabilities]\r\n")));
+            assert!(s.contains("\"ApplicationIcon\"=\"C:\\\\QP\\\\waveflow-quickplay.exe,0\""));
+            // The default handler stays the user's choice.
+            assert!(!s.contains("UserChoice"));
+            assert!(!s.contains(&format!("[{CLASSES_KEY}\\.flac]\r\n@=")));
+        }
+
+        /// Every type QuickPlay opens has a document icon of its own, and
+        /// every icon embedded is a type's; ids are distinct and above the
+        /// application icon's.
+        #[test]
+        fn icons_match_the_openable_types() {
+            use crate::file_icons::{FILE_ICONS, FILE_ICON_ALIASES, GENERIC_FILE_ICON};
+            for ext in crate::library::openable_extensions() {
+                assert_ne!(icon_id(ext), GENERIC_FILE_ICON, "{ext} has no icon");
+            }
+            assert_eq!(icon_id("aif"), icon_id("aiff"));
+            assert_eq!(icon_id("OGA"), icon_id("ogg"));
+            assert_eq!(icon_id("xyz"), GENERIC_FILE_ICON);
+            assert!(FILE_ICONS.iter().any(|(_, id)| *id == GENERIC_FILE_ICON));
+            let mut ids: Vec<u16> = FILE_ICONS.iter().map(|(_, id)| *id).collect();
+            ids.sort();
+            ids.dedup();
+            assert_eq!(ids.len(), FILE_ICONS.len());
+            assert!(ids[0] > 1);
+            for (alias, stem) in FILE_ICON_ALIASES {
+                assert!(crate::library::openable_extensions().contains(alias));
+                assert!(FILE_ICONS.iter().any(|(s, _)| s == stem));
+            }
+            for (stem, id) in FILE_ICONS {
                 assert!(
-                    removed
-                        .iter()
-                        .any(|r| key == *r || key.starts_with(&format!("{r}\\"))),
-                    "{key} is not removed"
+                    *id == GENERIC_FILE_ICON
+                        || crate::library::openable_extensions().contains(stem),
+                    "{stem}.ico is embedded for a type QuickPlay does not open"
                 );
+                let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("assets/file-icons")
+                    .join(format!("{stem}.ico"));
+                assert!(path.is_file(), "{} is missing", path.display());
             }
         }
 

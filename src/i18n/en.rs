@@ -78,4 +78,6 @@ pub const STRINGS: Strings = Strings {
     action_play_with: "Play with QuickPlay",
     action_add_to_playlist: "Add to QuickPlay playlist",
     desktop_comment: "Play audio files quickly",
+    file_type_audio: "{ext} audio file",
+    file_type_playlist: "{ext} playlist",
 };

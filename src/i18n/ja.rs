@@ -79,4 +79,6 @@ pub const STRINGS: Strings = Strings {
     action_play_with: "QuickPlay で再生",
     action_add_to_playlist: "QuickPlay のプレイリストに追加",
     desktop_comment: "オーディオファイルをすばやく再生",
+    file_type_audio: "{ext} オーディオファイル",
+    file_type_playlist: "{ext} プレイリスト",
 };

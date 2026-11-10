@@ -77,4 +77,6 @@ pub const STRINGS: Strings = Strings {
     action_play_with: "QuickPlay로 재생",
     action_add_to_playlist: "QuickPlay 재생목록에 추가",
     desktop_comment: "오디오 파일을 빠르게 재생합니다",
+    file_type_audio: "{ext} 오디오 파일",
+    file_type_playlist: "{ext} 재생목록",
 };
