@@ -296,12 +296,12 @@ paths, one list per open, and wakes the UI. Each open replaces the queue
 as `play` does, without the burst rule (Explorer's one process per file);
 a multi-selection arrives in one piece.
 Each format is its own document type with a `CFBundleTypeIconFile`, the
-same document icons as on Windows: Finder uses them for the files whose
-default player is QuickPlay wherever it shows a file's icon rather than a
-Quick Look preview. For the types macOS previews (FLAC, MP3, AAC, M3U…)
-the icon and list views show the preview, so the icon appears in the Get
-Info window (header and title bar); DSF and DFF have no preview and show
-it everywhere. The `.icns` files in
+same document icons as on Windows, for the files whose default player
+is QuickPlay. DSF and DFF, which macOS has no type for, show them
+everywhere. For the types macOS declares itself (FLAC, MP3, AAC, M3U…)
+Finder's icon and list views keep the system's icon (or the cover, with
+icon previews on), even with icon previews turned off (checked on macOS
+26.7); the icon appears in the Get Info window (header and title bar). The `.icns` files in
 `packaging/macos/file-icons/` are committed, made from the SVG sources
 in `assets/file-icons/svg/` by `packaging/macos/file-icons.sh`
 (ImageMagick, no Mac needed: an `.icns` is a list of PNGs, written
