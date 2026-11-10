@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.5.0-10b981?style=flat-square" alt="Version 1.5.0" />
+  <img src="https://img.shields.io/badge/version-1.6.0-10b981?style=flat-square" alt="Version 1.6.0" />
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey?style=flat-square" alt="Windows, Linux and macOS" />
   <img src="https://img.shields.io/badge/opens%20in-%3C%20300%20ms-10b981?style=flat-square" alt="Opens in under 300 ms" />
   <img src="https://img.shields.io/badge/license-GPL--3.0--only-green?style=flat-square" alt="GPL-3.0-only" />
