@@ -10,7 +10,8 @@
      out, as in WaveFlow, so QuickPlay is not offered for videos.
      One entry per format, each with its document icon (bundle.sh copies
      packaging/macos/file-icons/*.icns into Resources, file-icons.sh makes
-     them): Finder shows it on the files QuickPlay is the default player of. -->
+     them): Finder uses it for the files QuickPlay is the default player of,
+     wherever it shows their icon rather than a Quick Look preview. -->
 <plist version="1.0">
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
