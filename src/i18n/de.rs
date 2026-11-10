@@ -78,4 +78,6 @@ pub const STRINGS: Strings = Strings {
     action_play_with: "Mit QuickPlay wiedergeben",
     action_add_to_playlist: "Zur QuickPlay-Wiedergabeliste hinzufügen",
     desktop_comment: "Audiodateien schnell wiedergeben",
+    file_type_audio: "{ext}-Audiodatei",
+    file_type_playlist: "{ext}-Wiedergabeliste",
 };

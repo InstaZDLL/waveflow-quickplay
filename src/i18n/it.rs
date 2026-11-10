@@ -80,4 +80,6 @@ pub const STRINGS: Strings = Strings {
     action_play_with: "Riproduci con QuickPlay",
     action_add_to_playlist: "Aggiungi alla playlist di QuickPlay",
     desktop_comment: "Riproduci rapidamente i file audio",
+    file_type_audio: "File audio {ext}",
+    file_type_playlist: "Playlist {ext}",
 };

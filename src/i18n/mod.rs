@@ -250,9 +250,17 @@ pub struct Strings {
     // ── File-manager integration (context menu / "Open with") ──────────
     pub action_play_with: &'static str,
     pub action_add_to_playlist: &'static str,
-    /// The `Comment=` of the Linux desktop entry.
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    /// The `Comment=` of the Linux desktop entry, and the description
+    /// under the app's name in Windows' Default apps settings.
+    #[cfg_attr(not(any(windows, target_os = "linux")), allow(dead_code))]
     pub desktop_comment: &'static str,
+    /// Windows: Explorer's "Type" column for a file QuickPlay is the
+    /// default player of. `{ext}` is the extension in capitals ("FLAC").
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub file_type_audio: &'static str,
+    /// The same for a playlist ("M3U8").
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub file_type_playlist: &'static str,
 }
 
 /// Replaces each `{name}` placeholder of `template` with its value.
@@ -351,6 +359,12 @@ mod tests {
                 ),
                 ("language_system", en.language_system, t.language_system),
                 ("about_version", en.about_version, t.about_version),
+                ("file_type_audio", en.file_type_audio, t.file_type_audio),
+                (
+                    "file_type_playlist",
+                    en.file_type_playlist,
+                    t.file_type_playlist,
+                ),
             ] {
                 assert_eq!(
                     placeholders(reference),

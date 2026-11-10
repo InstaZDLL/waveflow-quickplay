@@ -18,6 +18,8 @@ mod capture;
 mod config;
 #[cfg(windows)]
 mod drop_verb;
+#[cfg(windows)]
+mod file_icons;
 mod i18n;
 mod integration;
 mod ipc;

@@ -77,4 +77,6 @@ pub const STRINGS: Strings = Strings {
     action_play_with: "Reproducir con QuickPlay",
     action_add_to_playlist: "Añadir a la lista de QuickPlay",
     desktop_comment: "Reproduce archivos de audio al instante",
+    file_type_audio: "Archivo de audio {ext}",
+    file_type_playlist: "Lista de reproducción {ext}",
 };

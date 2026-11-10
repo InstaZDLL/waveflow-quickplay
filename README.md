@@ -129,7 +129,7 @@ They are complementary, not two sizes of the same thing: QuickPlay deliberately 
 ### 🖱️ From the file manager
 
 - **One instance**: a second launch hands its files to the open player and exits. Plain launch replaces the queue and plays, `--enqueue` appends; Explorer's "Play with" / "Add to playlist" hand a whole multi-selection to one process.
-- `--register` adds *Play with QuickPlay* and *Add to QuickPlay playlist* to the context menu of every audio extension, of `.m3u` / `.m3u8` playlists and of folders, plus an "Open with" entry, for the current user and without administrator rights. On Linux it writes a `.desktop` entry with the audio and M3U MIME types. `--unregister` removes it all.
+- `--register` adds *Play with QuickPlay* and *Add to QuickPlay playlist* to the context menu of every audio extension, of `.m3u` / `.m3u8` playlists and of folders, plus an "Open with" entry and a Settings › Default apps entry, for the current user and without administrator rights. Once QuickPlay is the default player for a format, its files show a WaveFlow document icon with the format (FLAC, MP3, …). On Linux it writes a `.desktop` entry with the audio and M3U MIME types. `--unregister` removes it all.
 - The default handler for the extensions is left to you (Settings › Default apps, or `xdg-mime default app.waveflow.quickplay.desktop audio/flac`).
 - **macOS**: the app declares the audio formats it plays, so once it is in Applications Finder lists it under *Open With* for them, a multi-selection included. To make it the default player for a format, select a file, *Get Info › Open with › WaveFlow QuickPlay › Change All*. Finder has no per-app menu entries, so there is no *Add to playlist* there.
 

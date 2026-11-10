@@ -77,4 +77,6 @@ pub const STRINGS: Strings = Strings {
     action_play_with: "使用 QuickPlay 播放",
     action_add_to_playlist: "添加到 QuickPlay 播放列表",
     desktop_comment: "快速播放音频文件",
+    file_type_audio: "{ext} 音频文件",
+    file_type_playlist: "{ext} 播放列表",
 };
