@@ -248,6 +248,15 @@ impl QuickPlayApp {
             let ctx = app.ctx.clone();
             app.update_check = Some(update::spawn_check(move || ctx.request_repaint()));
         }
+        // An AppImage that updated itself still has the desktop entry an
+        // older version wrote: bring it up to date, off the UI thread.
+        if cfg!(target_os = "linux") {
+            std::thread::spawn(|| match crate::integration::refresh_if_outdated() {
+                Ok(true) => tracing::info!("desktop entry brought up to date"),
+                Ok(false) => {}
+                Err(err) => tracing::warn!(%err, "desktop entry not brought up to date"),
+            });
+        }
         if !files.is_empty() {
             app.add_paths(&files, true);
         }
@@ -529,16 +538,18 @@ impl QuickPlayApp {
     /// Expand `inputs` and append them. With `autoplay`, start the first new
     /// row when nothing is playing.
     fn add_paths(&mut self, inputs: &[PathBuf], autoplay: bool) {
-        if inputs.iter().any(|p| p.is_dir() || library::is_playlist(p)) {
-            // Folders are walked and playlists read on the loader's thread;
-            // the result comes back as `LoaderEvent::Scanned`.
-            self.set_status(self.t().status_scanning);
-            self.loader
-                .request_scan(inputs.to_vec(), autoplay, self.scan_generation);
+        if inputs.is_empty() {
             return;
         }
-        let paths = library::collect_audio_paths(inputs);
-        self.add_resolved(paths, !inputs.is_empty(), autoplay);
+        // Folders are walked, playlists read and files checked on the
+        // loader's scan thread (a check can read the file's header); the
+        // result comes back as `LoaderEvent::Scanned`. Only a walk is long
+        // enough to say so.
+        if inputs.iter().any(|p| p.is_dir() || library::is_playlist(p)) {
+            self.set_status(self.t().status_scanning);
+        }
+        self.loader
+            .request_scan(inputs.to_vec(), autoplay, self.scan_generation);
     }
 
     /// Queues already-expanded audio paths.
@@ -872,7 +883,11 @@ impl QuickPlayApp {
                     if generation != self.scan_generation {
                         continue;
                     }
-                    self.status = None;
+                    // The "scanning" line goes; another message stays.
+                    let scanning = self.t().status_scanning;
+                    if self.status.as_ref().is_some_and(|(s, _)| s == scanning) {
+                        self.status = None;
+                    }
                     self.add_resolved(paths, true, autoplay);
                 }
                 LoaderEvent::Meta { id, meta } => {

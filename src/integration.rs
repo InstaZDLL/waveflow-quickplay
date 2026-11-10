@@ -86,6 +86,16 @@ pub fn relabel(lang: Lang) -> io::Result<bool> {
     Ok(true)
 }
 
+/// At launch, rewrites the file-manager entries this executable registered
+/// when they are not what this version writes. An AppImage updates itself
+/// in place, so its desktop entry keeps the list of types of the version
+/// that wrote it (1.6.0 adds WavPack and Monkey's Audio); the installers
+/// and packages bring their own entries up to date. `Ok(false)` when
+/// nothing was registered from here or the entries are current.
+pub fn refresh_if_outdated() -> io::Result<bool> {
+    platform::refresh_if_outdated(&exe_path()?)
+}
+
 #[cfg(windows)]
 mod platform {
     use super::*;
@@ -328,6 +338,13 @@ mod platform {
         let rest = command.strip_prefix('"')?;
         let end = rest.find('"')?;
         Some(PathBuf::from(&rest[..end]))
+    }
+
+    /// Every way the Windows entries get here re-runs `--register` on an
+    /// upgrade (the installer, the updater's installer); a copy started by
+    /// hand does not update itself.
+    pub fn refresh_if_outdated(_exe: &std::path::Path) -> io::Result<bool> {
+        Ok(false)
     }
 
     pub fn is_registered_at(exe: &std::path::Path) -> bool {
@@ -720,6 +737,27 @@ mod platform {
         )
     }
 
+    /// Whether `existing`, the desktop entry on disk, was written for `exe`
+    /// and differs from `current`, what this version writes for it. An
+    /// entry for another copy is never touched.
+    fn is_outdated_entry_of(existing: &str, exe: &str, current: &str) -> bool {
+        existing.contains(&format!("\nTryExec={}\n", desktop_string(exe))) && existing != current
+    }
+
+    pub fn refresh_if_outdated(exe: &std::path::Path) -> io::Result<bool> {
+        let exe = exe.to_string_lossy();
+        let existing = match std::fs::read_to_string(desktop_file()?) {
+            Ok(text) => text,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(e) => return Err(e),
+        };
+        if !is_outdated_entry_of(&existing, &exe, &desktop_entry(&exe)) {
+            return Ok(false);
+        }
+        register(std::path::Path::new(exe.as_ref()), Lang::En.strings())?;
+        Ok(true)
+    }
+
     pub fn register(exe: &std::path::Path, _t: &Strings) -> io::Result<String> {
         // `exe_path` has made sure the path is Unicode.
         let entry = desktop_entry(&exe.to_string_lossy());
@@ -774,6 +812,20 @@ mod platform {
             );
             assert!(!entry.contains("new\nline"));
         }
+
+        /// An entry an older version wrote for this executable is
+        /// rewritten; the current one, or one for another copy, is not.
+        #[test]
+        fn only_an_outdated_entry_of_this_copy_is_rewritten() {
+            let exe = "/home/u/Apps/waveflow-quickplay.AppImage";
+            let current = desktop_entry(exe);
+            let older = current.replace("audio/x-wavpack;audio/x-ape;", "");
+            assert_ne!(older, current);
+            assert!(is_outdated_entry_of(&older, exe, &current));
+            assert!(!is_outdated_entry_of(&current, exe, &current));
+            let other = desktop_entry("/opt/other/waveflow-quickplay");
+            assert!(!is_outdated_entry_of(&other, exe, &current));
+        }
     }
 }
 
@@ -783,6 +835,11 @@ mod platform {
 
     pub fn is_registered_at(_exe: &std::path::Path) -> bool {
         false
+    }
+
+    /// The bundle's Info.plist comes with each version.
+    pub fn refresh_if_outdated(_exe: &std::path::Path) -> io::Result<bool> {
+        Ok(false)
     }
 
     #[cfg(target_os = "macos")]

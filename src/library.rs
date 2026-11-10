@@ -463,9 +463,15 @@ pub enum LoaderEvent {
 pub struct Loader {
     meta_tx: Sender<(u64, PathBuf)>,
     cover_tx: Sender<(u64, PathBuf)>,
-    tx: Sender<LoaderEvent>,
-    notify: Arc<dyn Fn() + Send + Sync>,
+    scan_tx: Sender<ScanRequest>,
     rx: Receiver<LoaderEvent>,
+}
+
+/// What [`Loader::request_scan`] hands its thread.
+struct ScanRequest {
+    inputs: Vec<PathBuf>,
+    autoplay: bool,
+    generation: u64,
 }
 
 impl Loader {
@@ -473,9 +479,30 @@ impl Loader {
         let (tx, rx) = unbounded::<LoaderEvent>();
         let (meta_tx, meta_rx) = unbounded::<(u64, PathBuf)>();
         let (cover_tx, cover_rx) = unbounded::<(u64, PathBuf)>();
+        let (scan_tx, scan_rx) = unbounded::<ScanRequest>();
 
-        let (tx_events, notify_events) = (tx.clone(), notify.clone());
+        let (tx_scan, notify_scan) = (tx.clone(), notify.clone());
         let (tx_meta, notify_meta) = (tx.clone(), notify.clone());
+        // One thread, in order: two adds come back in the order they were
+        // asked for, as a burst of launches handing over one file each.
+        if let Err(err) = std::thread::Builder::new()
+            .name("quickplay-scan".into())
+            .spawn(move || {
+                for request in scan_rx {
+                    let event = LoaderEvent::Scanned {
+                        paths: collect_audio_paths(&request.inputs),
+                        autoplay: request.autoplay,
+                        generation: request.generation,
+                    };
+                    if tx_scan.send(event).is_err() {
+                        break;
+                    }
+                    notify_scan();
+                }
+            })
+        {
+            tracing::error!(%err, "scan thread failed to start");
+        }
         if let Err(err) = std::thread::Builder::new()
             .name("quickplay-metadata".into())
             .spawn(move || {
@@ -514,35 +541,23 @@ impl Loader {
         Self {
             meta_tx,
             cover_tx,
-            tx: tx_events,
-            notify: notify_events,
+            scan_tx,
             rx,
         }
     }
 
-    /// Expands files and folders on a thread of its own: a dropped library
-    /// root can hold tens of thousands of entries, and the stats would
-    /// freeze the window if done on the UI thread.
+    /// Expands files and folders on the scan thread: a dropped library
+    /// root can hold tens of thousands of entries, and checking a file can
+    /// read its header (Ogg, WavPack, Monkey's Audio), which on a slow share
+    /// would freeze the window if done on the UI thread.
     /// `generation` comes back with the result, so the caller can tell a
     /// scan it has since given up on.
     pub fn request_scan(&self, inputs: Vec<PathBuf>, autoplay: bool, generation: u64) {
-        let (tx, notify) = (self.tx.clone(), self.notify.clone());
-        let spawned = std::thread::Builder::new()
-            .name("quickplay-scan".into())
-            .spawn(move || {
-                let paths = collect_audio_paths(&inputs);
-                let event = LoaderEvent::Scanned {
-                    paths,
-                    autoplay,
-                    generation,
-                };
-                if tx.send(event).is_ok() {
-                    notify();
-                }
-            });
-        if let Err(err) = spawned {
-            tracing::error!(%err, "scan thread failed to start");
-        }
+        let _ = self.scan_tx.send(ScanRequest {
+            inputs,
+            autoplay,
+            generation,
+        });
     }
 
     pub fn request_meta(&self, id: u64, path: PathBuf) {
