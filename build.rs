@@ -16,7 +16,16 @@ fn main() {
             let mut res = winresource::WindowsResource::new();
             res.set_icon("assets/icon.ico");
             for (stem, id) in FILE_ICONS {
-                res.set_icon_with_id(&format!("assets/file-icons/{stem}.ico"), &id.to_string());
+                let path = format!("assets/file-icons/{stem}.ico");
+                // A missing file would fail the whole resource script below,
+                // which only warns: the executable would ship without its
+                // own icon and with ProgIDs pointing at nothing. The files
+                // are in the repository, so a missing one is an error.
+                assert!(
+                    std::path::Path::new(&path).is_file(),
+                    "{path} is missing (listed in src/file_icons.rs)"
+                );
+                res.set_icon_with_id(&path, &id.to_string());
             }
             res.set("ProductName", "WaveFlow QuickPlay");
             res.set("FileDescription", "WaveFlow QuickPlay");
