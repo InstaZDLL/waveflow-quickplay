@@ -18,8 +18,21 @@ use super::engine::{AudioCmd, EngineEvent};
 use super::output::RING_CAPACITY;
 use super::spectrum::SpectrumAnalyzer;
 use super::state::{PlayerState, SharedPlayback};
+use waveflow_core::playback::channels::ChannelLayout;
 use waveflow_core::playback::replay_gain::TrackGain;
 use waveflow_core::playback::stream::ActiveStream;
+
+/// The speakers of the default output, which cpal opens in shared mode:
+/// on Windows and macOS the mix format's channels in WAVE order, on Linux
+/// an ALSA PCM's default order (rear pair before the centre and the LFE),
+/// as WaveFlow's engine takes them for the same outputs.
+fn output_layout(channels: usize) -> ChannelLayout {
+    if cfg!(target_os = "linux") {
+        ChannelLayout::alsa_default(channels)
+    } else {
+        ChannelLayout::from_count(channels)
+    }
+}
 
 /// Where the decoder's events go, plus a wake-up for the UI loop (egui
 /// repaints only when asked; the engine asks).
@@ -401,6 +414,7 @@ fn play_track(
 ) -> Exit {
     let dst_rate = shared.sample_rate();
     let dst_channels = shared.channels();
+    let dst_layout = output_layout(dst_channels);
     let mut scratch: Vec<f32> = Vec::with_capacity(16_384);
     let mut logged_rate = false;
     let bitrate = BitrateMeter::new(stream.packets_read);
@@ -471,7 +485,7 @@ fn play_track(
         let before = session.out.len();
         match session
             .stream
-            .decode_next(&mut session.out, &mut scratch, dst_rate, dst_channels)
+            .decode_next(&mut session.out, &mut scratch, dst_rate, &dst_layout)
         {
             Ok(false) => {
                 session.feed_spectrum(before, dst_rate, dst_channels);

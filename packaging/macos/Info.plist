@@ -11,7 +11,7 @@
      One entry per format, each with its document icon (bundle.sh copies
      packaging/macos/file-icons/*.icns into Resources, file-icons.sh makes
      them), for the files QuickPlay is the default player of: everywhere for
-     DSF and DFF; for the types macOS declares itself, Finder's icon and list
+     DSF, DFF, WavPack and APE; for the types macOS declares itself, Finder's icon and list
      views keep the system's icon and Get Info shows this one. -->
 <plist version="1.0">
 <dict>
@@ -131,6 +131,34 @@
 			<key>CFBundleTypeExtensions</key>
 			<array>
 				<string>aac</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>WavPack audio file</string>
+			<key>CFBundleTypeIconFile</key>
+			<string>wv.icns</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>wv</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Monkey's Audio file</string>
+			<key>CFBundleTypeIconFile</key>
+			<string>ape.icns</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>ape</string>
 			</array>
 		</dict>
 		<dict>

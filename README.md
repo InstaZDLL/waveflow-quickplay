@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.5.0-10b981?style=flat-square" alt="Version 1.5.0" />
+  <img src="https://img.shields.io/badge/version-1.6.0-10b981?style=flat-square" alt="Version 1.6.0" />
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey?style=flat-square" alt="Windows, Linux and macOS" />
   <img src="https://img.shields.io/badge/opens%20in-%3C%20300%20ms-10b981?style=flat-square" alt="Opens in under 300 ms" />
   <img src="https://img.shields.io/badge/license-GPL--3.0--only-green?style=flat-square" alt="GPL-3.0-only" />
@@ -99,7 +99,7 @@ They are complementary, not two sizes of the same thing: QuickPlay deliberately 
 
 ### 🎧 Playback
 
-- **Every format WaveFlow plays**: MP3, FLAC, WAV, AIFF, Vorbis, Opus, AAC, ALAC, DSF and DFF, with the desktop app's own decoders.
+- **Every format WaveFlow plays**: MP3, FLAC, WAV, AIFF, Vorbis, Opus, AAC, ALAC, WavPack, Monkey's Audio (APE), DSF and DFF, with the desktop app's own decoders (WaveFlow 2.0.0). Hybrid (lossy) WavPack and floating-point APE are not decoded.
 - **Files, folders and playlists** from the command line, a drop on either window or the open dialog; folders are walked four levels deep without blocking the window. An `.m3u` or `.m3u8` playlist queues its files in its own order, whether it gives them as absolute paths, paths relative to it or `file://` URLs, and whatever code page wrote it; web addresses and files that are not there are left out. A network share (`\\host\share`) is followed only from a playlist on that same host, since on Windows merely opening one can make Windows authenticate to that host with your current credentials; mapped drives always work.
 - **Instant pause, clean seeks**, no clicks or pops: the audio thread never waits on the interface.
 - **Auto-advance** with the track's tail played out; broken files are skipped and flagged in the playlist.
@@ -131,7 +131,7 @@ They are complementary, not two sizes of the same thing: QuickPlay deliberately 
 - **One instance**: a second launch hands its files to the open player and exits. Plain launch replaces the queue and plays, `--enqueue` appends; Explorer's "Play with" / "Add to playlist" hand a whole multi-selection to one process.
 - `--register` adds *Play with QuickPlay* and *Add to QuickPlay playlist* to the context menu of every audio extension, of `.m3u` / `.m3u8` playlists and of folders, plus an "Open with" entry and a Settings › Default apps entry, for the current user and without administrator rights. Once QuickPlay is the default player for a format, its files show a WaveFlow document icon with the format (FLAC, MP3, …). If you made QuickPlay the default player before these icons came, pick it again for each format (Settings › Default apps, or *Open with › Always*) to get them: Windows keeps the earlier choice, which has one icon for every format. On Linux it writes a `.desktop` entry with the audio and M3U MIME types. `--unregister` removes it all.
 - The default handler for the extensions is left to you (Settings › Default apps, or `xdg-mime default app.waveflow.quickplay.desktop audio/flac`).
-- **macOS**: the app declares the audio formats it plays, so once it is in Applications Finder lists it under *Open With* for them, a multi-selection included. To make it the default player for a format, select a file, *Get Info › Open with › WaveFlow QuickPlay › Change All*. DSF and DFF files then show the same WaveFlow document icon with the format as on Windows, everywhere. The formats macOS itself knows (FLAC, MP3, AAC, playlists…) keep macOS's own icon in the icon and list views (or the cover, with icon previews on), even with icon previews turned off; for them the WaveFlow icon shows in the *Get Info* window (its header and title bar). Finder has no per-app menu entries, so there is no *Add to playlist* there.
+- **macOS**: the app declares the audio formats it plays, so once it is in Applications Finder lists it under *Open With* for them, a multi-selection included. To make it the default player for a format, select a file, *Get Info › Open with › WaveFlow QuickPlay › Change All*. DSF, DFF, WavPack and APE files then show the same WaveFlow document icon with the format as on Windows, everywhere. The formats macOS itself knows (FLAC, MP3, AAC, playlists…) keep macOS's own icon in the icon and list views (or the cover, with icon previews on), even with icon previews turned off; for them the WaveFlow icon shows in the *Get Info* window (its header and title bar). Finder has no per-app menu entries, so there is no *Add to playlist* there.
 
 ### ⚙️ Settings and languages
 

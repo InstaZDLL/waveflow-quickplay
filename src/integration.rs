@@ -86,6 +86,16 @@ pub fn relabel(lang: Lang) -> io::Result<bool> {
     Ok(true)
 }
 
+/// At launch, rewrites the file-manager entries this executable registered
+/// when they are not what this version writes. An AppImage updates itself
+/// in place, so its desktop entry keeps the list of types of the version
+/// that wrote it (1.6.0 adds WavPack and Monkey's Audio); the installers
+/// and packages bring their own entries up to date. `Ok(false)` when
+/// nothing was registered from here or the entries are current.
+pub fn refresh_if_outdated() -> io::Result<bool> {
+    platform::refresh_if_outdated(&exe_path()?)
+}
+
 #[cfg(windows)]
 mod platform {
     use super::*;
@@ -328,6 +338,13 @@ mod platform {
         let rest = command.strip_prefix('"')?;
         let end = rest.find('"')?;
         Some(PathBuf::from(&rest[..end]))
+    }
+
+    /// Every way the Windows entries get here re-runs `--register` on an
+    /// upgrade (the installer, the updater's installer); a copy started by
+    /// hand does not update itself.
+    pub fn refresh_if_outdated(_exe: &std::path::Path) -> io::Result<bool> {
+        Ok(false)
     }
 
     pub fn is_registered_at(exe: &std::path::Path) -> bool {
@@ -624,7 +641,7 @@ mod platform {
     use super::*;
 
     const DESKTOP_ID: &str = "app.waveflow.quickplay";
-    const MIME_TYPES: &str = "audio/flac;audio/mpeg;audio/mp4;audio/x-m4a;audio/aac;audio/x-aac;audio/ogg;audio/vorbis;audio/x-vorbis+ogg;audio/opus;audio/x-opus+ogg;audio/wav;audio/x-wav;audio/vnd.wave;audio/aiff;audio/x-aiff;audio/x-dsf;audio/x-dff;audio/x-dsd;audio/x-mpegurl;audio/mpegurl;application/vnd.apple.mpegurl;";
+    const MIME_TYPES: &str = "audio/flac;audio/mpeg;audio/mp4;audio/x-m4a;audio/aac;audio/x-aac;audio/ogg;audio/vorbis;audio/x-vorbis+ogg;audio/opus;audio/x-opus+ogg;audio/wav;audio/x-wav;audio/vnd.wave;audio/aiff;audio/x-aiff;audio/x-dsf;audio/x-dff;audio/x-dsd;audio/x-wavpack;audio/x-ape;audio/x-mpegurl;audio/mpegurl;application/vnd.apple.mpegurl;";
 
     fn data_dir() -> io::Result<PathBuf> {
         dirs::data_dir().ok_or_else(|| io::Error::other("no XDG data directory"))
@@ -720,6 +737,75 @@ mod platform {
         )
     }
 
+    /// Whether `existing`, the desktop entry on disk, is one `--register`
+    /// wrote for `exe` and differs from `current`, what this version writes
+    /// for it. Its `Exec` and `TryExec` must both be the ones written for
+    /// `exe` (the same since 1.2.0): an entry for another copy, or one
+    /// edited by hand (another `Exec`, D-Bus activation), is left alone.
+    fn is_outdated_entry_of(existing: &str, exe: &str, current: &str) -> bool {
+        let exec = desktop_string(&format!("{} %F", exec_quote(exe)));
+        existing.contains(&format!("\nExec={exec}\n"))
+            && existing.contains(&format!("\nTryExec={}\n", desktop_string(exe)))
+            && !existing.contains("\nDBusActivatable=")
+            && existing != current
+    }
+
+    /// Rewrites the desktop entry `--register` wrote for `exe` when an
+    /// older version wrote it (see [`is_outdated_entry_of`]).
+    pub fn refresh_if_outdated(exe: &std::path::Path) -> io::Result<bool> {
+        let exe = exe.to_string_lossy();
+        let existing = match std::fs::read_to_string(desktop_file()?) {
+            Ok(text) => text,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(e) => return Err(e),
+        };
+        if !is_outdated_entry_of(&existing, &exe, &desktop_entry(&exe)) {
+            return Ok(false);
+        }
+        register(std::path::Path::new(exe.as_ref()), Lang::En.strings())?;
+        Ok(true)
+    }
+
+    /// Writes `bytes` to `path` through a file of this call's own beside it,
+    /// renamed over `path` once complete: the desktop never reads half an
+    /// entry, and two writers (a launch bringing the entry up to date and
+    /// `--register`) never share a file.
+    fn write_atomically(path: &std::path::Path, bytes: &[u8]) -> io::Result<()> {
+        use std::io::Write;
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static NEXT: AtomicU32 = AtomicU32::new(0);
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| io::Error::other("no file name"))?;
+        loop {
+            let n = NEXT.fetch_add(1, Ordering::Relaxed);
+            let tmp = path.with_file_name(format!(".{name}.{}-{n}.tmp", std::process::id()));
+            let mut file = match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&tmp)
+            {
+                Ok(file) => file,
+                // Left by an earlier process with the same id: next name.
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists && n < 1000 => continue,
+                Err(e) => return Err(e),
+            };
+            let written = file
+                .write_all(bytes)
+                .and_then(|()| file.sync_all())
+                .and_then(|()| {
+                    drop(file);
+                    std::fs::rename(&tmp, path)
+                });
+            if written.is_err() {
+                let _ = std::fs::remove_file(&tmp);
+            }
+            return written;
+        }
+    }
+
+    /// Writes the desktop entry for `exe` and the icon it names.
     pub fn register(exe: &std::path::Path, _t: &Strings) -> io::Result<String> {
         // `exe_path` has made sure the path is Unicode.
         let entry = desktop_entry(&exe.to_string_lossy());
@@ -730,8 +816,8 @@ mod platform {
                 std::fs::create_dir_all(parent)?;
             }
         }
-        std::fs::write(&desktop, entry)?;
-        std::fs::write(&icon, include_bytes!("../assets/icon-128.png"))?;
+        write_atomically(&desktop, entry.as_bytes())?;
+        write_atomically(&icon, include_bytes!("../assets/icon-128.png"))?;
         refresh();
         Ok(format!(
             "wrote {} and its icon; QuickPlay now appears in \"Open with\" for audio files. To make it the default: xdg-mime default {DESKTOP_ID}.desktop audio/flac (per type).",
@@ -774,6 +860,42 @@ mod platform {
             );
             assert!(!entry.contains("new\nline"));
         }
+
+        /// An entry an older version wrote for this executable is
+        /// rewritten; the current one, or one for another copy, is not.
+        #[test]
+        fn only_an_outdated_entry_of_this_copy_is_rewritten() {
+            let exe = "/home/u/Apps/waveflow-quickplay.AppImage";
+            let current = desktop_entry(exe);
+            let older = current.replace("audio/x-wavpack;audio/x-ape;", "");
+            assert_ne!(older, current);
+            assert!(is_outdated_entry_of(&older, exe, &current));
+            assert!(!is_outdated_entry_of(&current, exe, &current));
+            let other = desktop_entry("/opt/other/waveflow-quickplay");
+            assert!(!is_outdated_entry_of(&other, exe, &current));
+            // Edited by hand: another Exec, or D-Bus activation.
+            let wrapped = older.replace("\nExec=\"/home/u/Apps/", "\nExec=env X=1 \"/home/u/Apps/");
+            assert_ne!(wrapped, older);
+            assert!(!is_outdated_entry_of(&wrapped, exe, &current));
+            let dbus = older.replace(
+                "\nTerminal=false\n",
+                "\nTerminal=false\nDBusActivatable=true\n",
+            );
+            assert!(!is_outdated_entry_of(&dbus, exe, &current));
+        }
+
+        /// The file is replaced whole, and nothing is left beside it.
+        #[test]
+        fn an_entry_is_written_whole() {
+            let dir = std::env::temp_dir().join(format!("qp-desktop-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = dir.join("app.waveflow.quickplay.desktop");
+            write_atomically(&path, b"old").unwrap();
+            write_atomically(&path, b"new entry").unwrap();
+            assert_eq!(std::fs::read(&path).unwrap(), b"new entry");
+            assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 }
 
@@ -783,6 +905,11 @@ mod platform {
 
     pub fn is_registered_at(_exe: &std::path::Path) -> bool {
         false
+    }
+
+    /// The bundle's Info.plist comes with each version.
+    pub fn refresh_if_outdated(_exe: &std::path::Path) -> io::Result<bool> {
+        Ok(false)
     }
 
     #[cfg(target_os = "macos")]
