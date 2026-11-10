@@ -545,11 +545,21 @@ impl QuickPlayApp {
         // loader's scan thread (a check can read the file's header); the
         // result comes back as `LoaderEvent::Scanned`. Only a walk is long
         // enough to say so.
-        if inputs.iter().any(|p| p.is_dir() || library::is_playlist(p)) {
-            self.set_status(self.t().status_scanning);
+        let walk = inputs.iter().any(|p| p.is_dir() || library::is_playlist(p));
+        match self
+            .loader
+            .request_scan(inputs.to_vec(), autoplay, self.scan_generation)
+        {
+            Ok(()) if walk => self.set_status(self.t().status_scanning),
+            Ok(()) => {}
+            Err(err) => {
+                // No thread for it: check the files here rather than lose
+                // them.
+                tracing::warn!(%err, "scan thread failed to start; scanning here");
+                let paths = library::collect_audio_paths(inputs);
+                self.add_resolved(paths, true, autoplay);
+            }
         }
-        self.loader
-            .request_scan(inputs.to_vec(), autoplay, self.scan_generation);
     }
 
     /// Queues already-expanded audio paths.
@@ -744,6 +754,7 @@ impl QuickPlayApp {
     fn clear(&mut self) {
         self.queue.clear();
         self.scan_generation += 1;
+        self.loader.forget_scans();
         self.generation += 1;
         self.selected = None;
         self.playing_id = None;
@@ -872,12 +883,19 @@ impl QuickPlayApp {
     }
 
     fn pump_loader_events(&mut self) {
-        for event in self.loader.poll() {
+        let events = self.loader.poll();
+        // A slow scan keeps finished ones waiting: look again when it
+        // stops holding them, as nothing else may wake the window.
+        if let Some(wait) = self.loader.scan_wait() {
+            self.ctx.request_repaint_after(wait);
+        }
+        for event in events {
             match event {
                 LoaderEvent::Scanned {
                     paths,
                     autoplay,
                     generation,
+                    ..
                 } => {
                     // Requested for a queue that has been cleared since.
                     if generation != self.scan_generation {

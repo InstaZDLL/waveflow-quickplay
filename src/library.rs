@@ -2,8 +2,10 @@
 //! folder cover — off the UI thread, through the same `waveflow-core`
 //! helpers the desktop scanner uses.
 
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use lofty::picture::PictureType;
@@ -450,6 +452,8 @@ pub enum LoaderEvent {
     },
     /// Folders expanded off the UI thread (see [`Loader::request_scan`]).
     Scanned {
+        /// Which request this answers, for [`Loader::poll`]'s ordering.
+        seq: u64,
         paths: Vec<PathBuf>,
         autoplay: bool,
         /// The `generation` the scan was requested with, handed back as is.
@@ -459,50 +463,36 @@ pub enum LoaderEvent {
 
 /// Two worker threads: one walks the metadata queue in order, the other
 /// decodes covers and always skips to the most recent request — the user
-/// who presses Next five times wants the fifth cover, not the five.
+/// who presses Next five times wants the fifth cover, not the five. Scans
+/// get a thread each (see [`Loader::request_scan`]).
 pub struct Loader {
     meta_tx: Sender<(u64, PathBuf)>,
     cover_tx: Sender<(u64, PathBuf)>,
-    scan_tx: Sender<ScanRequest>,
+    tx: Sender<LoaderEvent>,
+    notify: Arc<dyn Fn() + Send + Sync>,
     rx: Receiver<LoaderEvent>,
+    next_scan: u64,
+    /// Scans not handed out yet, oldest first, and since when the oldest
+    /// has been waited for.
+    scan_order: VecDeque<u64>,
+    head_since: Instant,
+    /// Scans done that wait for an older one.
+    scans_done: HashMap<u64, LoaderEvent>,
 }
 
-/// What [`Loader::request_scan`] hands its thread.
-struct ScanRequest {
-    inputs: Vec<PathBuf>,
-    autoplay: bool,
-    generation: u64,
-}
+/// How long a scan may keep the ones asked for after it waiting: past
+/// this, a later scan that is done is handed out, and the slow one (a
+/// share that does not answer) when it comes.
+const SCAN_HOLD: Duration = Duration::from_secs(2);
 
 impl Loader {
     pub fn new(notify: Arc<dyn Fn() + Send + Sync>) -> Self {
         let (tx, rx) = unbounded::<LoaderEvent>();
         let (meta_tx, meta_rx) = unbounded::<(u64, PathBuf)>();
         let (cover_tx, cover_rx) = unbounded::<(u64, PathBuf)>();
-        let (scan_tx, scan_rx) = unbounded::<ScanRequest>();
 
-        let (tx_scan, notify_scan) = (tx.clone(), notify.clone());
+        let (tx_events, notify_events) = (tx.clone(), notify.clone());
         let (tx_meta, notify_meta) = (tx.clone(), notify.clone());
-        // One thread, in order: two adds come back in the order they were
-        // asked for, as a burst of launches handing over one file each.
-        if let Err(err) = std::thread::Builder::new()
-            .name("quickplay-scan".into())
-            .spawn(move || {
-                for request in scan_rx {
-                    let event = LoaderEvent::Scanned {
-                        paths: collect_audio_paths(&request.inputs),
-                        autoplay: request.autoplay,
-                        generation: request.generation,
-                    };
-                    if tx_scan.send(event).is_err() {
-                        break;
-                    }
-                    notify_scan();
-                }
-            })
-        {
-            tracing::error!(%err, "scan thread failed to start");
-        }
         if let Err(err) = std::thread::Builder::new()
             .name("quickplay-metadata".into())
             .spawn(move || {
@@ -541,23 +531,65 @@ impl Loader {
         Self {
             meta_tx,
             cover_tx,
-            scan_tx,
+            tx: tx_events,
+            notify: notify_events,
             rx,
+            next_scan: 0,
+            scan_order: VecDeque::new(),
+            head_since: Instant::now(),
+            scans_done: HashMap::new(),
         }
     }
 
-    /// Expands files and folders on the scan thread: a dropped library
-    /// root can hold tens of thousands of entries, and checking a file can
-    /// read its header (Ogg, WavPack, Monkey's Audio), which on a slow share
-    /// would freeze the window if done on the UI thread.
+    /// Expands files and folders on a thread of the request's own: a
+    /// dropped library root can hold tens of thousands of entries, and
+    /// checking a file can read its header (Ogg, WavPack, Monkey's Audio),
+    /// which on a slow share would freeze the window on the UI thread, and
+    /// on a shared thread hold up every add after it. [`Loader::poll`]
+    /// hands the results out in the order they were asked for.
     /// `generation` comes back with the result, so the caller can tell a
-    /// scan it has since given up on.
-    pub fn request_scan(&self, inputs: Vec<PathBuf>, autoplay: bool, generation: u64) {
-        let _ = self.scan_tx.send(ScanRequest {
-            inputs,
-            autoplay,
-            generation,
-        });
+    /// scan it has since given up on. An error when no thread could start.
+    pub fn request_scan(
+        &mut self,
+        inputs: Vec<PathBuf>,
+        autoplay: bool,
+        generation: u64,
+    ) -> std::io::Result<()> {
+        let seq = self.next_scan;
+        let (tx, notify) = (self.tx.clone(), self.notify.clone());
+        std::thread::Builder::new()
+            .name("quickplay-scan".into())
+            .spawn(move || {
+                let event = LoaderEvent::Scanned {
+                    seq,
+                    paths: collect_audio_paths(&inputs),
+                    autoplay,
+                    generation,
+                };
+                if tx.send(event).is_ok() {
+                    notify();
+                }
+            })?;
+        self.next_scan += 1;
+        if self.scan_order.is_empty() {
+            self.head_since = Instant::now();
+        }
+        self.scan_order.push_back(seq);
+        Ok(())
+    }
+
+    /// Stops ordering the scans under way, for a queue that was cleared:
+    /// their results are handed out as they come, and dropped by their
+    /// generation.
+    pub fn forget_scans(&mut self) {
+        self.scan_order.clear();
+        self.scans_done.clear();
+    }
+
+    /// How long until [`Loader::poll`] stops keeping finished scans behind
+    /// a slow one, when it keeps any.
+    pub fn scan_wait(&self) -> Option<Duration> {
+        (!self.scans_done.is_empty()).then(|| SCAN_HOLD.saturating_sub(self.head_since.elapsed()))
     }
 
     pub fn request_meta(&self, id: u64, path: PathBuf) {
@@ -568,8 +600,30 @@ impl Loader {
         let _ = self.cover_tx.send((id, path));
     }
 
-    pub fn poll(&self) -> Vec<LoaderEvent> {
-        self.rx.try_iter().collect()
+    /// Everything the workers have finished. Scans come in the order they
+    /// were asked for, except that one still running after [`SCAN_HOLD`]
+    /// no longer holds back the ones done after it.
+    pub fn poll(&mut self) -> Vec<LoaderEvent> {
+        let mut out = Vec::new();
+        for event in self.rx.try_iter() {
+            match &event {
+                LoaderEvent::Scanned { seq, .. } if self.scan_order.contains(seq) => {
+                    self.scans_done.insert(*seq, event);
+                }
+                _ => out.push(event),
+            }
+        }
+        while let Some(&head) = self.scan_order.front() {
+            if let Some(event) = self.scans_done.remove(&head) {
+                out.push(event);
+            } else if self.scans_done.is_empty() || self.head_since.elapsed() < SCAN_HOLD {
+                break;
+            }
+            // Handed out, or given up on waiting for: the next one is first.
+            self.scan_order.pop_front();
+            self.head_since = Instant::now();
+        }
+        out
     }
 }
 
@@ -695,6 +749,52 @@ mod tests {
         assert_eq!(percent_decode("/100%.flac").as_deref(), Some("/100%.flac"));
         assert_eq!(percent_decode("/%+1.flac").as_deref(), Some("/%+1.flac"));
         assert_eq!(percent_decode("/%FF.flac"), None);
+    }
+
+    /// Scans come back in the order asked for; one still running after
+    /// `SCAN_HOLD` stops holding the others, and comes when it comes; a
+    /// cleared queue's scans are handed out as they arrive.
+    #[test]
+    fn scans_come_back_in_order_unless_one_is_stuck() {
+        use super::{Loader, LoaderEvent, SCAN_HOLD};
+        let mut loader = Loader::new(std::sync::Arc::new(|| {}));
+        let done = |loader: &Loader, seq: u64| {
+            let event = LoaderEvent::Scanned {
+                seq,
+                paths: Vec::new(),
+                autoplay: false,
+                generation: 0,
+            };
+            loader.tx.send(event).unwrap();
+        };
+        let seqs = |events: Vec<LoaderEvent>| -> Vec<u64> {
+            events
+                .into_iter()
+                .filter_map(|e| match e {
+                    LoaderEvent::Scanned { seq, .. } => Some(seq),
+                    _ => None,
+                })
+                .collect()
+        };
+        loader.scan_order.extend([0, 1]);
+        done(&loader, 1);
+        assert!(seqs(loader.poll()).is_empty(), "1 waits for 0");
+        assert!(loader.scan_wait().is_some());
+        done(&loader, 0);
+        assert_eq!(seqs(loader.poll()), [0, 1]);
+        assert!(loader.scan_wait().is_none());
+
+        loader.scan_order.extend([2, 3]);
+        done(&loader, 3);
+        loader.head_since = std::time::Instant::now() - SCAN_HOLD;
+        assert_eq!(seqs(loader.poll()), [3], "2 is stuck: 3 goes past it");
+        done(&loader, 2);
+        assert_eq!(seqs(loader.poll()), [2], "the stuck one when it comes");
+
+        loader.scan_order.push_back(4);
+        loader.forget_scans();
+        done(&loader, 4);
+        assert_eq!(seqs(loader.poll()), [4]);
     }
 
     fn layout(sample_rate_hz: u32, channels: DsdChannels) -> DsdLayout {
