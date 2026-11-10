@@ -135,6 +135,34 @@
 		</dict>
 		<dict>
 			<key>CFBundleTypeName</key>
+			<string>WavPack audio file</string>
+			<key>CFBundleTypeIconFile</key>
+			<string>wv.icns</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>wv</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Monkey's Audio file</string>
+			<key>CFBundleTypeIconFile</key>
+			<string>ape.icns</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>ape</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
 			<string>DSF audio file</string>
 			<key>CFBundleTypeIconFile</key>
 			<string>dsf.icns</string>

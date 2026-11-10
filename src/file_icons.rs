@@ -25,6 +25,8 @@ pub const FILE_ICONS: &[(&str, u16)] = &[
     ("dff", 112),
     ("m3u", 113),
     ("m3u8", 114),
+    ("wv", 115),
+    ("ape", 116),
 ];
 
 /// The icon of an extension with no file of its own.

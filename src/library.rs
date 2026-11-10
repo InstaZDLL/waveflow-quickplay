@@ -564,7 +564,9 @@ mod tests {
     #[cfg(windows)]
     use super::{location, may_follow, Location};
     use std::path::{Path, PathBuf};
-    use waveflow_core::audio_format::dsd::parser::{DsdChannels, DsdContainer, DsdLayout};
+    use waveflow_core::audio_format::dsd::parser::{
+        DsdChannels, DsdContainer, DsdLayout, DsdSpeakers,
+    };
 
     #[cfg(windows)]
     #[test]
@@ -684,6 +686,7 @@ mod tests {
         DsdLayout {
             container: DsdContainer::Dsf,
             channels,
+            speakers: DsdSpeakers::DsfType(2),
             sample_rate_hz,
             samples_per_channel: 0,
             data_offset: 0,

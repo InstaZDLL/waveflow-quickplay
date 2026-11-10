@@ -17,7 +17,7 @@ src="$root/assets/file-icons/svg"
 out="$here/file-icons"
 # The formats Info.plist gives an icon of their own. .aif and .oga use the
 # aiff and ogg icons; .mp4 is not declared on macOS.
-formats=(flac mp3 wav aiff ogg opus m4a aac dsf dff m3u m3u8)
+formats=(flac mp3 wav aiff ogg opus m4a aac wv ape dsf dff m3u m3u8)
 # (type, pixels) for each entry: 16 pt and 32 pt @2x (ic11, ic12), then
 # 128 to 512 pt, each @1x and @2x. No 16 or 32 pixel frame: Finder (macOS
 # 26) draws the PNG types for them, icp4 and icp5, as noise, and iconutil
