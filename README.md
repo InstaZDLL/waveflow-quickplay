@@ -131,7 +131,7 @@ They are complementary, not two sizes of the same thing: QuickPlay deliberately 
 - **One instance**: a second launch hands its files to the open player and exits. Plain launch replaces the queue and plays, `--enqueue` appends; Explorer's "Play with" / "Add to playlist" hand a whole multi-selection to one process.
 - `--register` adds *Play with QuickPlay* and *Add to QuickPlay playlist* to the context menu of every audio extension, of `.m3u` / `.m3u8` playlists and of folders, plus an "Open with" entry and a Settings › Default apps entry, for the current user and without administrator rights. Once QuickPlay is the default player for a format, its files show a WaveFlow document icon with the format (FLAC, MP3, …). If you made QuickPlay the default player before these icons came, pick it again for each format (Settings › Default apps, or *Open with › Always*) to get them: Windows keeps the earlier choice, which has one icon for every format. On Linux it writes a `.desktop` entry with the audio and M3U MIME types. `--unregister` removes it all.
 - The default handler for the extensions is left to you (Settings › Default apps, or `xdg-mime default app.waveflow.quickplay.desktop audio/flac`).
-- **macOS**: the app declares the audio formats it plays, so once it is in Applications Finder lists it under *Open With* for them, a multi-selection included. To make it the default player for a format, select a file, *Get Info › Open with › WaveFlow QuickPlay › Change All*. Finder has no per-app menu entries, so there is no *Add to playlist* there.
+- **macOS**: the app declares the audio formats it plays, so once it is in Applications Finder lists it under *Open With* for them, a multi-selection included. To make it the default player for a format, select a file, *Get Info › Open with › WaveFlow QuickPlay › Change All*; the files then show the same WaveFlow document icon with their format as on Windows. Finder has no per-app menu entries, so there is no *Add to playlist* there.
 
 ### ⚙️ Settings and languages
 
@@ -345,6 +345,7 @@ part agrees to the [Code of Conduct](CODE_OF_CONDUCT.md).
 | `assets/fonts/Inter-Regular.ttf`, `Inter-SemiBold.ttf` | The Inter Project Authors | https://github.com/rsms/inter | OFL-1.1 (`assets/fonts/OFL-Inter.txt`) |
 | `assets/fonts/NotoSansCJKsc-Regular.otf` | Google, Adobe (Noto CJK) | https://github.com/notofonts/noto-cjk | OFL-1.1 (`assets/fonts/OFL-NotoSansCJK.txt`) |
 | `assets/icon-128.png`, `assets/icon.ico`, `assets/icon.icns` | WaveFlow | `src-tauri/crates/app/icons/` | GPL-3.0-only (project) |
+| `assets/file-icons/` (SVG sources and Windows `.ico`), `packaging/macos/file-icons/*.icns` | WaveFlow | WaveFlow branding, QuickPlay file icons | GPL-3.0-only (project) |
 
 The screenshots show *Feel Special* by TWICE, used for illustration only.
 
