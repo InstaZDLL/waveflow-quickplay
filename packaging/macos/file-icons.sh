@@ -18,10 +18,12 @@ out="$here/file-icons"
 # The formats Info.plist gives an icon of their own. .aif and .oga use the
 # aiff and ogg icons; .mp4 is not declared on macOS.
 formats=(flac mp3 wav aiff ogg opus m4a aac dsf dff m3u m3u8)
-# (type, pixels) for each entry: 16, 32 and 64 as PNG (icp4, icp5,
-# ic11/ic12 for the 16 pt and 32 pt @2x), then 128 to 512 pt, each @1x
-# and @2x.
-entries=(icp4:16 icp5:32 ic11:32 ic12:64 ic07:128 ic13:256 ic08:256 ic14:512 ic09:512 ic10:1024)
+# (type, pixels) for each entry: 16 pt and 32 pt @2x (ic11, ic12), then
+# 128 to 512 pt, each @1x and @2x. No 16 or 32 pixel frame: Finder (macOS
+# 26) draws the PNG types for them, icp4 and icp5, as noise, and iconutil
+# reads them wrong too; without them it scales ic11 and ic12 down cleanly.
+# So the simplified W of the .ico files' smallest frames is not used here.
+entries=(ic11:32 ic12:64 ic07:128 ic13:256 ic08:256 ic14:512 ic09:512 ic10:1024)
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
@@ -49,9 +51,7 @@ for format in "${formats[@]}"; do
   for entry in "${entries[@]}"; do
     type=${entry%%:*}
     px=${entry##*:}
-    # The 16-pixel frame uses the simplified W, as the .ico files do.
     svg="$src/$format.svg"
-    [ "$px" -le 16 ] && svg="$src/audio-small.svg"
     png="$tmp/$format-$type.png"
     render "$svg" "$px" "$png"
     size=$(wc -c <"$png")
