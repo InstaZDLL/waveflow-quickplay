@@ -297,8 +297,8 @@ as `play` does, without the burst rule (Explorer's one process per file);
 a multi-selection arrives in one piece.
 Each format is its own document type with a `CFBundleTypeIconFile`, the
 same document icons as on Windows, for the files whose default player
-is QuickPlay. DSF and DFF, which macOS has no type for, show them
-everywhere. For the types macOS declares itself (FLAC, MP3, AAC, M3U…)
+is QuickPlay. DSF, DFF, WavPack and APE, which macOS has no type for,
+show them everywhere. For the types macOS declares itself (FLAC, MP3, AAC, M3U…)
 Finder's icon and list views keep the system's icon (or the cover, with
 icon previews on), even with icon previews turned off (checked on macOS
 26.7); the icon appears in the Get Info window (header and title bar). The `.icns` files in
