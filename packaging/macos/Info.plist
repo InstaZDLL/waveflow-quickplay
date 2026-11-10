@@ -7,7 +7,12 @@
      extension, as WaveFlow Desktop does: DSF and DFF have no system type,
      and an entry that lists content types has its extensions ignored. The
      files arrive as application:openURLs: (src/macos.rs). .mp4 is left
-     out, as in WaveFlow, so QuickPlay is not offered for videos. -->
+     out, as in WaveFlow, so QuickPlay is not offered for videos.
+     One entry per format, each with its document icon (bundle.sh copies
+     packaging/macos/file-icons/*.icns into Resources, file-icons.sh makes
+     them), for the files QuickPlay is the default player of: everywhere for
+     DSF and DFF; for the types macOS declares itself, Finder's icon and list
+     views keep the system's icon and Get Info shows this one. -->
 <plist version="1.0">
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
@@ -16,7 +21,9 @@
 	<array>
 		<dict>
 			<key>CFBundleTypeName</key>
-			<string>Audio file</string>
+			<string>MP3 audio file</string>
+			<key>CFBundleTypeIconFile</key>
+			<string>mp3.icns</string>
 			<key>CFBundleTypeRole</key>
 			<string>Viewer</string>
 			<key>LSHandlerRank</key>
@@ -24,22 +31,141 @@
 			<key>CFBundleTypeExtensions</key>
 			<array>
 				<string>mp3</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>FLAC audio file</string>
+			<key>CFBundleTypeIconFile</key>
+			<string>flac.icns</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>CFBundleTypeExtensions</key>
+			<array>
 				<string>flac</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>WAV audio file</string>
+			<key>CFBundleTypeIconFile</key>
+			<string>wav.icns</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>CFBundleTypeExtensions</key>
+			<array>
 				<string>wav</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>AIFF audio file</string>
+			<key>CFBundleTypeIconFile</key>
+			<string>aiff.icns</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>CFBundleTypeExtensions</key>
+			<array>
 				<string>aiff</string>
 				<string>aif</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Ogg audio file</string>
+			<key>CFBundleTypeIconFile</key>
+			<string>ogg.icns</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>CFBundleTypeExtensions</key>
+			<array>
 				<string>ogg</string>
 				<string>oga</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Opus audio file</string>
+			<key>CFBundleTypeIconFile</key>
+			<string>opus.icns</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>CFBundleTypeExtensions</key>
+			<array>
 				<string>opus</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>M4A audio file</string>
+			<key>CFBundleTypeIconFile</key>
+			<string>m4a.icns</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>CFBundleTypeExtensions</key>
+			<array>
 				<string>m4a</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>AAC audio file</string>
+			<key>CFBundleTypeIconFile</key>
+			<string>aac.icns</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>CFBundleTypeExtensions</key>
+			<array>
 				<string>aac</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>DSF audio file</string>
+			<key>CFBundleTypeIconFile</key>
+			<string>dsf.icns</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>CFBundleTypeExtensions</key>
+			<array>
 				<string>dsf</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>DFF audio file</string>
+			<key>CFBundleTypeIconFile</key>
+			<string>dff.icns</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>CFBundleTypeExtensions</key>
+			<array>
 				<string>dff</string>
 			</array>
 		</dict>
 		<dict>
 			<key>CFBundleTypeName</key>
-			<string>Playlist</string>
+			<string>M3U playlist</string>
+			<key>CFBundleTypeIconFile</key>
+			<string>m3u.icns</string>
 			<key>CFBundleTypeRole</key>
 			<string>Viewer</string>
 			<key>LSHandlerRank</key>
@@ -47,6 +173,19 @@
 			<key>CFBundleTypeExtensions</key>
 			<array>
 				<string>m3u</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>M3U8 playlist</string>
+			<key>CFBundleTypeIconFile</key>
+			<string>m3u8.icns</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>CFBundleTypeExtensions</key>
+			<array>
 				<string>m3u8</string>
 			</array>
 		</dict>

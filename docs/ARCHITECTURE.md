@@ -39,7 +39,8 @@ waveflow-quickplay
    ├── src/macos.rs       macOS: the files Finder opens (application:openURLs:)
    ├── src/ui/            theme, painted icons, widgets, player pane, playlist window, settings page
    └── packaging/         NSIS template and Linux desktop entry for cargo-packager,
-                          the .rpm definition, the macOS Info.plist and bundle script
+                          the .rpm definition, the macOS Info.plist, bundle script and
+                          document icons (file-icons.sh makes them)
 ```
 
 The UI never touches the engine or the queue directly: every pane reads a
@@ -294,6 +295,18 @@ and hands the loop to eframe with `create_native`. The method queues the
 paths, one list per open, and wakes the UI. Each open replaces the queue
 as `play` does, without the burst rule (Explorer's one process per file);
 a multi-selection arrives in one piece.
+Each format is its own document type with a `CFBundleTypeIconFile`, the
+same document icons as on Windows, for the files whose default player
+is QuickPlay. DSF and DFF, which macOS has no type for, show them
+everywhere. For the types macOS declares itself (FLAC, MP3, AAC, M3U…)
+Finder's icon and list views keep the system's icon (or the cover, with
+icon previews on), even with icon previews turned off (checked on macOS
+26.7); the icon appears in the Get Info window (header and title bar). The `.icns` files in
+`packaging/macos/file-icons/` are committed, made from the SVG sources
+in `assets/file-icons/svg/` by `packaging/macos/file-icons.sh`
+(ImageMagick, no Mac needed: an `.icns` is a list of PNGs, written
+directly), so a release needs no image tools; `bundle.sh` copies them
+and fails if Info.plist names one that is not there.
 
 ## Continuing in WaveFlow
 

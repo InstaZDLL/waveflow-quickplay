@@ -35,6 +35,14 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$binary" "$app/Contents/MacOS/waveflow-quickplay"
 chmod 755 "$app/Contents/MacOS/waveflow-quickplay"
 cp "$root/assets/icon.icns" "$app/Contents/Resources/icon.icns"
+# The document icons Info.plist names per format.
+cp "$here"/file-icons/*.icns "$app/Contents/Resources/"
+for icon in $(sed -n 's#.*<string>\([a-z0-9]*\.icns\)</string>.*#\1#p' "$here/Info.plist"); do
+  if [ ! -f "$app/Contents/Resources/$icon" ]; then
+    echo "bundle.sh: Info.plist names $icon, which is not in the bundle" >&2
+    exit 1
+  fi
+done
 cp "$root/LICENSE" "$app/Contents/Resources/LICENSE.txt"
 sed "s/@VERSION@/$version/g" "$here/Info.plist" > "$app/Contents/Info.plist"
 plutil -lint "$app/Contents/Info.plist"
