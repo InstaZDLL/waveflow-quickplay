@@ -78,7 +78,7 @@ image = { version = "0.25", default-features = false, features = [
 # ── Desktop glue ────────────────────────────────────────────────────────
 # The XDG portal backend on Linux (the desktop's own dialog, no GTK linked,
 # Flatpak-friendly); the common-controls dialog on Windows.
-rfd = { version = "0.17", default-features = false, features = [
+rfd = { version = "0.18", default-features = false, features = [
     "xdg-portal",
     "wayland",
     "common-controls-v6",
